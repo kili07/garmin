@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -604,7 +604,11 @@ async function idbClear() {
 const TITLES = { today: 'Heute', trends: 'Trends', training: 'Training', patterns: 'Muster' };
 let view = 'today';
 
-/* Zustand der Ansichten — bewusst nicht gespeichert, beim Start gilt das Übliche */
+/* Zustand der Ansichten — nicht im Datensatz gespeichert, beim Start gilt das
+   Übliche. Nur über ein Neuladen hinweg bleibt er erhalten (sessionStorage):
+   wer auf „Trends" die Seite aktualisiert, landet wieder dort und nicht auf
+   „Heute". Ein frischer Start der App beginnt eine neue Sitzung, also „Heute". */
+const VIEW_KEY = 'garmin.view';
 let dayView = null;                   // angezeigter Tag auf „Heute" (null = heute)
 let trendKey = 'hrv';
 let trendRange = 91;
@@ -614,6 +618,30 @@ let trainShow = 30;
 let bestScope = 'all';
 let patRange = 182;
 let openScatter = new Set();
+
+function saveViewState() {
+  try {
+    sessionStorage.setItem(VIEW_KEY, JSON.stringify({
+      view, dayView, trendKey, trendRange, trainPeriod, trainSport, bestScope, patRange,
+    }));
+  } catch (e) { /* privater Modus o.ä. — dann eben wieder „Heute" */ }
+}
+
+/** Liefert die zuletzt offene Ansicht und setzt ihren Zustand zurück. */
+function restoreViewState() {
+  let s;
+  try { s = JSON.parse(sessionStorage.getItem(VIEW_KEY) || 'null'); } catch (e) { s = null; }
+  if (!s || !TITLES[s.view]) return 'today';
+  // Ein Tag, der inzwischen „heute" oder Zukunft ist, wird wieder zu „heute"
+  if (typeof s.dayView === 'string' && s.dayView < Core.today()) dayView = s.dayView;
+  if (typeof s.trendKey === 'string') trendKey = s.trendKey;      // renderTrends prüft, ob es ihn gibt
+  if (typeof s.trendRange === 'number') trendRange = s.trendRange;
+  if (typeof s.trainPeriod === 'string') trainPeriod = s.trainPeriod;
+  if (typeof s.trainSport === 'string') trainSport = s.trainSport;
+  if (typeof s.bestScope === 'string') bestScope = s.bestScope;
+  if (typeof s.patRange === 'number') patRange = s.patRange;
+  return s.view;
+}
 
 function nav(v) {
   view = v;
@@ -1832,6 +1860,8 @@ function wire() {
     maybeAutoSync();
   });
   window.addEventListener('online', maybeAutoSync);
+  // Feuert auch beim Neuladen — ein Zeitpunkt deckt alle Zustandswechsel ab
+  window.addEventListener('pagehide', saveViewState);
 }
 
 load();
@@ -1839,7 +1869,7 @@ applyTheme(db.theme);
 reindex();
 wire();
 wireBack();
-nav('today');
+nav(restoreViewState());
 
 /* Bittet den Browser, den Speicher nicht bei Platzmangel wegzuräumen. */
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
