@@ -237,7 +237,7 @@ button.row:active{background:var(--surface-2)}
    leitet jeden Tipp auf seine Beschriftung an den ersten Knopf weiter. */
 label,.lbl{display:block; font-size:13px; font-weight:600; color:var(--text-2); margin-bottom:var(--sp-4)}
 label > input, label > select{margin-top:6px}
-input[type="text"],input[type="url"],input[type="password"],input:not([type]),select{
+input[type="text"],input[type="url"],input[type="password"],input[type="number"],input:not([type]),select{
   display:block; width:100%; min-height:46px; padding:10px 12px; border-radius:var(--r-sm);
   background:var(--surface-2); border:1px solid var(--line); color:var(--text); font-size:16px; font-weight:400;
 }
@@ -333,6 +333,30 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; backgrou
 .sig-l .dot{width:8px; height:8px}
 .sig-v{font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap}
 .sig-s{font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+/* Fitness-Score: Ring mit Anteil über conic-gradient */
+.fit-top{display:flex; align-items:center; gap:14px}
+.fit-ring{--c:var(--accent); width:60px; height:60px; border-radius:50%; flex:none; display:grid; place-items:center;
+  background:conic-gradient(var(--c) calc(var(--p) * 1%), var(--line) 0)}
+.fit-ring.st-good{--c:var(--up)} .fit-ring.st-warn{--c:var(--warn)}
+.fit-ring b{width:48px; height:48px; border-radius:50%; background:var(--surface); display:grid; place-items:center;
+  font:800 21px/1 var(--font-display); font-variant-numeric:tabular-nums}
+button.fit-card:active .fit-ring b{background:var(--surface-2)}
+.fit-ring.big{width:76px; height:76px}
+.fit-ring.big b{width:62px; height:62px; font-size:27px}
+.fit-t{font:800 20px/1.2 var(--font-display)}
+.fit-s{color:var(--text-2); font-size:13.5px; margin-top:2px}
+.fit-parts{display:grid; grid-template-columns:repeat(auto-fit, minmax(92px, 1fr)); gap:8px 12px; margin-top:var(--sp-3)}
+.fit-parts > div{display:grid; grid-template-columns:1fr auto; align-items:baseline; gap:2px 6px; min-width:0}
+.fit-parts span{font-size:11.5px; font-weight:600; color:var(--text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.fit-parts b{font-size:13px; font-weight:800; font-variant-numeric:tabular-nums}
+.fit-parts .meter{grid-column:1 / -1; height:4px}
+.fit-row .t em{font-style:normal; font-weight:500; font-size:12px; color:var(--muted); margin-left:8px}
+.fit-row .meter{margin-top:6px; height:4px}
+.fit-row .end b{font-size:18px; font-weight:800}
+.fit-me{display:grid; grid-template-columns:1fr 1.4fr; gap:12px; align-items:start}
+.fit-me label,.fit-me .lbl{margin-bottom:0}
+@media (max-width:360px){ .fit-me{grid-template-columns:1fr} }
 
 .sleep-card .sl-top{display:flex; align-items:flex-end; gap:14px}
 .sl-score{font:800 40px/1 var(--font-display); font-variant-numeric:tabular-nums}
@@ -523,6 +547,48 @@ table.laps{width:100%; border-collapse:collapse; font-size:13px; font-variant-nu
 .vs span{font-size:12px; color:var(--text-2)}
 .ins-m{font-size:12px; color:var(--muted); margin-top:6px}
 .ins .chart{margin-top:var(--sp-2)}
+
+/* ── Schlafmuster ───────────────────────────────────────────── */
+/* Zweite Reihe unter den Reitern: Zeitraum, etwas kleiner */
+.seg.sm{margin:0 0 var(--sp-3)}
+.seg.sm button{min-height:32px; font-size:13px}
+.pf .vs{margin-top:0}
+.vs b small{font-size:12px; font-weight:600; color:var(--text-2)}
+.pf-lead{margin:var(--sp-3) 0 2px; font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--muted)}
+.pf-top > div{display:flex; flex-direction:column; padding:6px 0; border-top:1px solid var(--line)}
+.pf-top b{font-size:15px; font-weight:700}
+.pf-top span{font-size:13px; color:var(--text-2); font-variant-numeric:tabular-nums}
+table.pf-t{width:100%; border-collapse:collapse; margin-top:var(--sp-3); font-size:13px; font-variant-numeric:tabular-nums}
+.pf-t th{padding:0 4px 4px; font-size:11.5px; font-weight:700; color:var(--muted); text-align:right; white-space:nowrap}
+.pf-t td{padding:5px 4px; border-top:1px solid var(--line); text-align:right; white-space:nowrap}
+.pf-t th:first-child,.pf-t td:first-child{text-align:left; white-space:normal; color:var(--text-2); padding-left:0}
+.pf-t td:last-child{font-weight:700}
+.pf-t tr.pf-g td{border-top:0; padding:10px 0 2px; font-size:11.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--muted)}
+.pf-t tr.dim td{opacity:.55}
+.pf .link{display:block; min-height:36px; padding:0; text-align:left}
+/* Idealbereich: unter / im / über Garmins Bereich */
+.rg-row + .rg-row{margin-top:var(--sp-3)}
+.rg-h{display:flex; align-items:baseline; gap:8px; font-size:14px}
+.rg-v{margin-left:auto; font-size:13px; font-weight:700; font-variant-numeric:tabular-nums}
+.rg{display:flex; height:10px; margin-top:5px; border-radius:5px; overflow:hidden; background:var(--line)}
+.rg i{display:block; height:100%}
+.rg-lo{background:var(--warn)} .rg-in{background:var(--up)} .rg-hi{background:var(--accent)}
+/* Garmins Bewertung: ausgezeichnet, gut, mittel, schwach */
+.q-E{background:var(--up)} .q-G{background:var(--accent)} .q-F{background:var(--warn)} .q-P{background:var(--down)}
+.wk.static tr{cursor:default}
+/* Eine Nacht: Pulsspitzen in der Kurve und als Uhrzeiten */
+.mk{stroke:var(--warn); stroke-width:1; stroke-dasharray:2 2; opacity:.8}
+.mk-d{fill:var(--warn)}
+.readout .mk-t{color:var(--warn); font-weight:600}
+.np-h{display:flex; align-items:baseline; gap:8px}
+.np-h b{font:800 30px/1 var(--font-display)}
+.np-h span{font-size:14px; color:var(--text-2)}
+.tchips{display:flex; flex-wrap:wrap; gap:6px; margin:var(--sp-2) 0 var(--sp-1)}
+.tchips span{display:inline-flex; align-items:baseline; gap:5px; padding:3px 9px; border-radius:var(--r-pill); background:var(--warn-soft); color:var(--warn); font-size:12.5px; font-weight:600; font-variant-numeric:tabular-nums}
+.tchips b{color:var(--text)}
+.np-rows{margin-top:var(--sp-2)}
+.np-rows span small{display:block; font-size:12px; color:var(--muted)}
+.np-rows b{white-space:nowrap; text-align:right}
 
 /* ── Breitere Bildschirme ───────────────────────────────────── */
 @media(min-width:560px){

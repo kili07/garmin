@@ -314,7 +314,8 @@ function track(pts, vals, o) {
   return s + '</svg>';
 }
 
-/** Kurve über Zeit oder Strecke (Puls, Tempo, Höhe). */
+/** Kurve über Zeit oder Strecke (Puls, Tempo, Höhe). o.marks: Zeitpunkte
+    (in der Einheit von xs), die als senkrechter Strich markiert werden. */
 function curve(xs, ys, o) {
   o = o || {};
   const h = o.h || 120, x0 = 34, x1 = W - 6, top = 8, bot = h - 18;
@@ -336,6 +337,12 @@ function curve(xs, ys, o) {
     if (first >= 0) s += `<path class="area ${esc(o.cls || '')}" d="${path(X, Y)}L${r1(X[last])} ${bot}L${r1(X[first])} ${bot}Z"/>`;
   }
   s += `<path class="ln-c ${esc(o.cls || '')}" d="${path(X, Y)}"/>`;
+  // Markierte Zeitpunkte (Pulsspitzen der Nacht): Strich über die ganze Höhe, Punkt oben
+  for (const v of o.marks || []) {
+    if (!fin(v) || v < good[0] || v > good[good.length - 1]) continue;
+    const mx = r1(x(v));
+    s += `<line class="mk" x1="${mx}" x2="${mx}" y1="${top + 6}" y2="${bot}"/><circle class="mk-d" cx="${mx}" cy="${top + 3}" r="2.6"/>`;
+  }
   // Zeitachse in Minuten-Schritten (60 s), nicht bei 1000 s
   for (const v of ticks(good[0], good[good.length - 1], 4, o.xUnit || 60)) s += `<text class="ax" x="${r1(x(v))}" y="${h - 4}" text-anchor="middle">${esc(fx(v))}</text>`;
   s += `<line class="cursor hidden" x1="0" x2="0" y1="${top}" y2="${bot}"/>`;

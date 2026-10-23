@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.3.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -76,6 +76,8 @@ const blank = () => ({
     proxy: '',          // Adresse des Cloudflare Workers
     history: 365,       // so viele Tage Verlauf holt der Abgleich
     autoSync: true,     // beim Öffnen abgleichen, wenn der letzte Abgleich > 1 h her ist
+    born: null,         // Jahrgang — nur für die VO2max-Tabelle im Fitness-Score
+    sex: '',            // 'm', 'f' oder '' (offen), ebenso
   },
   theme: 'dark',
   setup: false,         // erster Abgleich gelungen?
@@ -114,6 +116,9 @@ function normalize(src) {
   d.acts.forEach((a) => { if (typeof a.start !== 'string') a.start = a.date + ' 00:00'; if (!a.type) a.type = 'other'; });
   if (![365, 730, 1825].includes(+d.settings.history)) d.settings.history = 365;
   d.settings.proxy = String(d.settings.proxy || '');
+  const born = Math.round(+d.settings.born);
+  d.settings.born = born >= 1900 && born <= new Date().getFullYear() - 10 ? born : null;
+  if (!['m', 'f'].includes(d.settings.sex)) d.settings.sex = '';
   if (!THEMES[d.theme]) d.theme = base.theme;
   return d;
 }
@@ -667,6 +672,10 @@ async function sync(manual) {
     db.setup = true;
     save(); reindex(); render();
 
+    // Gleich nach dem Aktuellen: Die Nacht von heute früh soll schon ausgewertet sein, wenn man sie öffnet
+    await analyzeNights();
+    render();
+
     if ((db.sync.sleepV || 0) < SLEEP_V) {
       await refillSleep(Core.addDays(recentFrom, -1));
       save(); reindex(); render();
@@ -782,12 +791,15 @@ let trainSport = 'all';
 let trainShow = 30;
 let bestScope = 'all';
 let patRange = 182;
+let patTab = 'sleep';                 // Muster: 'sleep' (Schlafmuster) oder 'pairs' (Zusammenhänge)
+let sleepTarget = 'awakeN';           // wonach der Steckbrief die Nächte drittelt (Sleep.TARGETS)
+let pfAll = false;                    // Steckbrief: auch Größen ohne deutlichen Unterschied zeigen
 let openScatter = new Set();
 
 function saveViewState() {
   try {
     sessionStorage.setItem(VIEW_KEY, JSON.stringify({
-      view, dayView, trendKey, trendRange, trainPeriod, trainSport, bestScope, patRange,
+      view, dayView, trendKey, trendRange, trainPeriod, trainSport, bestScope, patRange, patTab, sleepTarget,
     }));
   } catch (e) { /* privater Modus o.ä. — dann eben wieder „Heute" */ }
 }
@@ -805,6 +817,8 @@ function restoreViewState() {
   if (typeof s.trainSport === 'string') trainSport = s.trainSport;
   if (typeof s.bestScope === 'string') bestScope = s.bestScope;
   if (typeof s.patRange === 'number') patRange = s.patRange;
+  if (s.patTab === 'sleep' || s.patTab === 'pairs') patTab = s.patTab;
+  if (typeof s.sleepTarget === 'string') sleepTarget = s.sleepTarget;   // renderSleepPatterns prüft, ob es sie gibt
   return s.view;
 }
 
@@ -933,6 +947,8 @@ function renderToday() {
   }
   h += '</div>';
 
+  h += fitnessCard(date);
+
   // Schlaf der Nacht vor diesem Tag
   if (fin(d.slp)) {
     const ph = [['deep', 'Tief'], ['light', 'Leicht'], ['rem', 'REM'], ['awake', 'Wach']].filter(([k]) => fin(d[k]) && d[k] > 0);
@@ -953,10 +969,10 @@ function renderToday() {
 
   // Kacheln: jede mit Abstand zum eigenen 30-Tage-Mittel und den letzten zwei Wochen
   const recentDays = Core.dateRange(Core.addDays(date, -13), date).map((x) => db.days[x] || {});
-  const keys = ['hrv', 'rhr', 'bbMax', 'stress', 'steps', 'im', 'load', 'weight', 'slpResp', 'spo2'].filter((k) => {
+  const keys = ['hrv', 'rhr', 'bbMax', 'stress', 'steps', 'im', 'load', 'vo2', 'weight', 'slpResp', 'spo2'].filter((k) => {
     if (k === 'load') return db.acts.length > 0;
     if (k === 'im') return recentDays.some((x) => x.imMod != null || x.imVig != null);
-    if (k === 'weight') return Core.series(db, idx, k, Core.addDays(date, -60), date).some(fin);
+    if (M[k].sparse) return Core.series(db, idx, k, Core.addDays(date, -sparseDays(k)), date).some(fin);
     return Core.series(db, idx, k, Core.addDays(date, -13), date).some(fin);
   });
   h += '<div class="tiles">' + keys.map((k) => tile(k, date)).join('') + '</div>';
@@ -970,6 +986,156 @@ function renderToday() {
   }
   if (date !== t) h += `<div class="btn-row" style="margin-top:var(--sp-4)"><button class="btn" data-day="${t}">Zurück zu heute</button></div>`;
   el.innerHTML = h;
+}
+
+/* ── 7a. Fitness-Score ──────────────────────────────────────── */
+/* Gerechnet in Core.fitness: fünf Teile gegen feste Maßstäbe, Stand der
+   vier Wochen vor dem Tag. Die Karte zeigt Score, Stufe und die Teile;
+   antippen öffnet Verlauf, Werte und wie gerechnet wird. */
+
+/** Alter und Geschlecht für die VO2max-Tabelle, soweit eingetragen. */
+function fitMe(date) {
+  const b = db.settings.born;
+  return { age: b ? +date.slice(0, 4) - b : null, sex: db.settings.sex || '' };
+}
+
+function fitRing(f, big) {
+  return `<div class="fit-ring st-${f.status}${big ? ' big' : ''}" style="--p:${f.score}"><b>${nf0.format(f.score)}</b></div>`;
+}
+
+/** „+4 in 4 Wochen" — gegen den Score 28 Tage davor, wenn es ihn gab. */
+function fitDelta(date, f) {
+  const old = Core.fitness(db, idx, Core.addDays(date, -28), fitMe(date));
+  if (old.score == null) return '';
+  const dd = f.score - old.score;
+  return dd ? `${dd > 0 ? '+' : '−'}${Math.abs(dd)} in 4 Wochen` : 'gleich wie vor 4 Wochen';
+}
+
+function fitnessCard(date) {
+  const f = Core.fitness(db, idx, date, fitMe(date));
+  if (f.score == null) {
+    return `<button class="card fit-card" data-fitness="${date}" style="margin-top:var(--sp-3)">
+      <div class="card-h">Fitness<span class="muted">letzte 4 Wochen</span>${ICON.chev}</div>
+      <p class="note" style="margin:0">Für den Fitness-Score braucht es etwa drei Wochen Daten.</p></button>`;
+  }
+  const delta = fitDelta(date, f);
+  return `<button class="card fit-card" data-fitness="${date}" style="margin-top:var(--sp-3)">
+    <div class="card-h">Fitness<span class="muted">letzte 4 Wochen</span>${ICON.chev}</div>
+    <div class="fit-top">${fitRing(f)}
+      <div class="grow"><div class="fit-t">${esc(f.label)}</div>${delta ? `<div class="fit-s">${esc(delta)}</div>` : ''}</div></div>
+    <div class="fit-parts">${f.parts.map((p) => `<div><span>${esc(p.label)}</span><b>${nf0.format(p.score)}</b>
+      <div class="meter"><i class="${p.score >= 70 ? 'full' : ''}" style="width:${p.score}%"></i></div></div>`).join('')}</div>
+  </button>`;
+}
+
+const FIT_MISSING = {
+  vo2: 'Garmin schätzt sie bei Läufen und Radfahrten im Freien mit Puls (bei Rad mit Leistungsmesser). In den letzten 120 Tagen kam keine.',
+  im: 'Es fehlen Intensitätsminuten von mindestens drei Wochen.',
+  rhr: 'Es fehlt der Ruhepuls von mindestens zehn Tagen.',
+  steps: 'Es fehlen Schritte von mindestens zwei Wochen.',
+  days: 'Es fehlen Tageswerte von mindestens drei Wochen.',
+};
+const FIT_TREND = { vo2: null, im: 'im', rhr: 'rhr', steps: 'steps', days: 'trainMin' };
+
+/** Was der Wert eines Teils bedeutet, in einem Satz. */
+function fitPartText(p, me) {
+  switch (p.key) {
+    case 'vo2': {
+      const who = me.sex === 'm' ? 'der Männer' : me.sex === 'f' ? 'der Frauen' : 'der Menschen';
+      const age = fin(me.age) ? ` um ${Math.round(me.age / 5) * 5}` : '';
+      return `VO2max ${nf0.format(p.value)} (${dayLabel(p.date)}), ${p.approx ? 'ungefähr' : 'etwa'} besser als ${nf0.format(p.score)} % ${who}${age}`;
+    }
+    case 'im': return `Ø ${nf0.format(p.value)} Intensitätsminuten pro Woche, die WHO empfiehlt 150–300`;
+    case 'rhr': return `typisch ${nf0.format(p.value)} bpm (Median)`;
+    case 'steps': return `typisch ${nf0.format(p.value)} Schritte am Tag (Median)`;
+    case 'days': return `${nf1.format(p.value)} aktive Tage pro Woche: mindestens 20 min Training oder 30 Intensitätsminuten`;
+  }
+  return '';
+}
+
+function fitNextText(f) {
+  const p = f.parts.find((x) => x.key === f.next);
+  if (!p) return '';
+  switch (p.key) {
+    case 'vo2': return 'Am meisten bringt die Ausdauer. Die VO2max steigt am ehesten mit viel lockerem Umfang und ein, zwei harten Einheiten (Intervalle) pro Woche, über Wochen bis Monate.';
+    case 'im': return p.value < 150
+      ? `Am meisten bringen mehr Intensitätsminuten: Bis zu 150 pro Woche fehlen im Schnitt ${nf0.format(150 - p.value)}. Zügiges Gehen zählt schon, intensive Minuten doppelt.`
+      : 'Am meisten bringen mehr Intensitätsminuten. 150 pro Woche sind erreicht, bis 300 steigt der Nutzen weiter.';
+    case 'rhr': return 'Am meisten ist beim Ruhepuls zu holen. Er sinkt mit Ausdauertraining über Wochen; wenig Schlaf, Stress, Alkohol und Infekte treiben ihn kurzfristig hoch.';
+    case 'steps': return `Am meisten bringen mehr Schritte im Alltag. Bis 7500 am Tag steigt der Nutzen am stärksten${p.value < 7500 ? `, Dir fehlen typischerweise ${nf0.format(7500 - p.value)}` : ', bis 10 000 weiter'}.`;
+    case 'days': return 'Am meisten bringt Regelmäßigkeit: lieber öfter und kürzer als selten und lang. Drei bis fünf aktive Tage pro Woche sind das Ziel.';
+  }
+  return '';
+}
+
+function openFitness(date) {
+  const me = fitMe(date);
+  const f = Core.fitness(db, idx, date, me);
+  let h = '';
+  if (f.score != null) {
+    const delta = fitDelta(date, f);
+    h += `<div class="fit-top" style="margin-bottom:var(--sp-3)">${fitRing(f, true)}
+      <div class="grow"><div class="fit-t">${esc(f.label)}</div>
+      <div class="fit-s">${esc([dayLabel(date) === 'Heute' ? '' : 'Stand ' + dayLabel(date), delta].filter(Boolean).join(' · ') || 'Stand der letzten vier Wochen')}</div></div></div>`;
+
+    const from = maxDate(firstDate(), Core.addDays(date, -179));
+    const dates = Core.dateRange(from, date);
+    const vals = Core.fitnessSeries(db, idx, from, date, me);
+    if (vals.filter(fin).length >= 2) {
+      const rd = (i) => `<span>${esc(dayLabel(dates[i]))}</span><b>${fin(vals[i]) ? nf0.format(vals[i]) : '–'}</b>`;
+      h += `<div class="sec-h">Verlauf<span class="muted">${dates.length > 120 ? '6 Monate' : nf0.format(dates.length) + ' Tage'}</span></div>
+        <div class="card">${chartBox(Charts.trend({ dates, vals, avg: vals, h: 150, fmtY: (v) => nf0.format(v) }), rd, rd(dates.length - 1), 's')}</div>`;
+    }
+    if (f.next) h += `<div class="hint" style="margin-top:var(--sp-3)">${ICON.info}<div class="grow"><span>${esc(fitNextText(f))}</span></div></div>`;
+  } else {
+    h += '<p class="dlg-t">Für den Fitness-Score braucht es mindestens drei der fünf Teile, die meisten davon aus drei Wochen Daten.</p>';
+  }
+
+  h += `<div class="sec-h">Woraus er besteht</div><div class="rows">${f.parts.map((p) => {
+    const tk = FIT_TREND[p.key];
+    const attr = p.key === 'vo2' ? 'data-nav="training"' : `data-trend="${tk}"`;
+    return `<button class="row fit-row" ${attr}><span class="grow"><span class="t">${esc(p.label)}<em>${f.score != null ? `zählt ${nf0.format(p.share * 100)} %` : ''}</em></span>
+      <span class="sub">${esc(fitPartText(p, me))}</span>
+      <div class="meter"><i class="${p.score >= 70 ? 'full' : ''}" style="width:${p.score}%"></i></div></span>
+      <span class="end"><b class="num">${nf0.format(p.score)}</b></span>${ICON.chev}</button>`;
+  }).join('')}${f.missing.map((k) => {
+    const def = Core.FIT_PARTS.find((x) => x.key === k);
+    return `<div class="row"><span class="grow"><span class="t muted">${esc(def.label)} fehlt</span><span class="sub">${esc(FIT_MISSING[k])}</span></span></div>`;
+  }).join('')}</div>`;
+
+  const yr = new Date().getFullYear();
+  h += `<div class="sec-h">Über Dich</div>
+    <p class="note" style="margin:0 2px var(--sp-3)">VO2max hängt stark von Alter und Geschlecht ab. Mit beidem vergleicht der Score mit Deiner Gruppe statt mit allen. Bleibt auf diesem Gerät.</p>
+    <div class="fit-me">
+      <label>Jahrgang<input id="fitBorn" type="number" inputmode="numeric" min="1900" max="${yr - 10}" placeholder="z. B. 1990" value="${db.settings.born || ''}"></label>
+      <div class="lbl">Geschlecht<div class="seg" id="fitSex">${[['m', 'Mann'], ['f', 'Frau'], ['', 'offen']].map(([v, l]) => `<button data-v="${v}" class="${db.settings.sex === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    </div>`;
+
+  h += `<div class="sec-h">Wie gerechnet wird</div>
+    <p class="note" style="margin:0 2px">Fünf Teile, jeder 0–100 gegen einen festen Maßstab, nicht gegen Deinen eigenen Schnitt. Gezählt werden die vier Wochen vor dem Tag, VO2max ist der letzte Wert der letzten 120 Tage.</p>
+    <div class="card qrows" style="margin-top:var(--sp-3)">
+      <div><span>VO2max · 35 %</span><b>Garmins Tabelle nach Alter und Geschlecht</b></div>
+      <div><span>Intensität · 25 %</span><b>150 / Woche = 60, 300 = 85</b></div>
+      <div><span>Ruhepuls · 15 %</span><b>62 = 60, 52 = 85</b></div>
+      <div><span>Schritte · 15 %</span><b>7500 = 65, 10 000 = 85</b></div>
+      <div><span>Aktive Tage · 10 %</span><b>3 Tage / Woche = 65, 5 = 100</b></div>
+    </div>
+    <p class="note" style="margin:var(--sp-2) 2px 0">Fehlt ein Teil, zählen die übrigen anteilig mehr. HRV fehlt bewusst: Sie unterscheidet sich von Mensch zu Mensch so stark, dass es keinen festen Maßstab gibt. Das ist eine eigene Zahl dieser App, nicht Garmins Fitnessalter.</p>`;
+
+  openSheet('Fitness', h, null);
+  // Nach einer Änderung neu zeichnen, ohne nach oben zu springen
+  const redo = () => { const y = $('#sheetBody').scrollTop; save(); renderToday(); openFitness(date); $('#sheetBody').scrollTop = y; };
+  $('#sheetBody').onclick = (e) => {
+    const b = e.target.closest('#fitSex button[data-v]');
+    if (b) { db.settings.sex = b.dataset.v; redo(); return; }
+    if (e.target.closest('[data-trend],[data-nav]')) closeSheet();
+  };
+  $('#fitBorn').onchange = (e) => {
+    const v = Math.round(+e.target.value);
+    db.settings.born = v >= 1900 && v <= yr - 10 ? v : null;
+    if (e.target.value && !db.settings.born) toast('Jahrgang zwischen 1900 und ' + (yr - 10));
+    redo();
+  };
 }
 
 function qualLabel(q) {
@@ -1191,6 +1357,8 @@ function openNight(date) {
   };
 
   loadNight(date).then((n) => {
+    // Auswertung merken, auch wenn das Sheet inzwischen zu ist — sie zählt für die Muster
+    if (db.days[date] && db.days[date].nv !== NIGHT_ANA_V) { noteNight(date, n); save(); }
     const box = $('#nightCurves');
     if (!box || nightDate !== date || $('#sheet').classList.contains('hidden')) return;
     box.innerHTML = nightCurvesHtml(date, n);
@@ -1215,10 +1383,12 @@ function nightFallback(date, d) {
 
 /* Wie die Aktivitätskurven: einmal laden, danach aus IndexedDB. Die letzte
    Nacht kann noch unvollständig sein, solange die Uhr nicht synchronisiert
-   hat — sie gilt deshalb nur zwei Stunden. */
-const NIGHT_V = 1;
+   hat — sie gilt deshalb nur zwei Stunden. NIGHT_V folgt `v` aus
+   Core.mapNight: Fassung 2 liest auch Garmins unruhige Momente. `inSync`:
+   aufgerufen vom Abgleich, der sich anhalten lässt und Fortschritt zeigt. */
+const NIGHT_V = 2;
 const nightCache = new Map();
-async function loadNight(date) {
+async function loadNight(date, inSync) {
   const key = 'night:' + date;
   const recent = date >= Core.addDays(Core.today(), -1);
   let n = nightCache.get(key) || await idbGet(key);
@@ -1232,7 +1402,7 @@ async function loadNight(date) {
   let broken = false;
   // Jede Quelle für sich: Eine Uhr ohne SpO2 soll die anderen Kurven nicht verhindern
   const get = async (path) => {
-    try { return await api(path); } catch (e) {
+    try { return await api(path, inSync ? { sync: true } : undefined); } catch (e) {
       if (fatal(e)) throw e;
       if (e.kind !== 'missing' && e.kind !== 'forbidden') broken = true;
       return null;
@@ -1250,10 +1420,55 @@ async function loadNight(date) {
   n = Core.mapNight(raw, nightFallback(date, d));
   if (!n) throw new Error('Für diese Nacht kennt Garmin kein Schlaffenster.');
   n.at = Date.now();
-  nightCache.set(key, n);
   // Ein Teil schlug fehl (nicht nur „gibt es nicht"): nicht dauerhaft merken, beim nächsten Öffnen neu
+  if (broken) n.partial = true;
+  nightCache.set(key, n);
   if (!broken) await idbPut(key, n);
   return n;
+}
+
+/* Auswertung einer Nacht (sleep.js) in den Tageswerten merken: Pulsspitzen,
+   Garmins unruhige Momente, Lage des Pulstiefpunkts. Erst damit werden
+   Muster über viele Nächte möglich. Als erledigt (`nv`) gilt eine Nacht erst,
+   wenn ihre Messreihen vollständig kamen — bei den letzten beiden Nächten
+   außerdem erst, wenn der Puls die Nacht abdeckt: Die Uhr synchronisiert
+   manchmal in Etappen, und eine halbe Nacht hätte zu wenig Spitzen. */
+const NIGHT_ANA_V = 1;               // hochzählen, wenn Sleep.nightEvents anders rechnet
+function noteNight(date, n) {
+  const x = db.days[date];
+  if (!x) return;
+  for (const k of Sleep.NIGHT_FIELDS) delete x[k];
+  const ev = n ? Sleep.nightEvents(n) : null;
+  if (ev) Object.assign(x, Sleep.nightSummary(ev));
+  const recent = date >= Core.addDays(Core.today(), -1);
+  if (!n || (!n.partial && (!recent || (ev && ev.cover >= 0.8)))) x.nv = NIGHT_ANA_V;
+}
+
+/* Nächte im Hintergrund auswerten. Jeder Abgleich nimmt sich bis zu
+   NIGHT_BATCH noch nicht ausgewertete Nächte der letzten NIGHT_BACK Tage vor,
+   neueste zuerst. Eine Nacht sind 5–6 Anfragen (danach liegt sie in
+   IndexedDB und öffnet sofort); hinter dem Worker mit seinen
+   526-Wiederholungen etwa 15 s. So wächst der ausgewertete Verlauf mit jedem
+   Abgleich, ohne einen einzelnen minutenlang zu machen. */
+const NIGHT_BATCH = 3, NIGHT_BACK = 60;
+async function analyzeNights() {
+  const t = Core.today();
+  let done = 0;
+  for (let i = 0; i < NIGHT_BACK && done < NIGHT_BATCH; i++) {
+    const d = Core.addDays(t, -i), x = db.days[d];
+    if (!x || !fin(x.slp) || x.nv === NIGHT_ANA_V) continue;
+    checkStop();
+    progress(`Nacht auswerten · ${dfDay.format(pdate(d))}`);
+    done++;
+    try {
+      noteNight(d, await loadNight(d, true));
+    } catch (e) {
+      if (fatal(e)) throw e;
+      // Für diese Nacht kennt Garmin kein Schlaffenster: nicht bei jedem Abgleich neu fragen
+      x.nv = NIGHT_ANA_V;
+    }
+    save();
+  }
 }
 
 /** Kurven der Nacht auf gemeinsamer Zeitachse. Jede Kurve meldet beim
@@ -1271,16 +1486,23 @@ function nightCurvesHtml(date, n) {
   } else {
     h += '<p class="note" style="margin:0 2px var(--sp-2)">Den Verlauf der Phasen über die Nacht gibt Garmins Personal API nicht heraus, nur die Summen oben.</p>';
   }
-  const curve = (key, label, unit, cls, first) => {
+  // Pulsspitzen (sleep.js) als Striche in der Pulskurve; Antippen nennt sie
+  const ev = Sleep.nightEvents(n);
+  const spk = (ev && ev.spikes) || [];
+  const spikeAt = (x) => spk.find((s) => x >= n.s0 + s.a - 3 && x <= n.s0 + s.b + 3);
+  const curve = (key, label, unit, cls, first, marks) => {
     const ys = g[key];
     if (ys.filter(fin).length < 3) return '';
     const fy = (v) => nf0.format(v);
-    const reader = (i) => `<span>${esc(Core.fmtClock(xs[i]))}</span><b>${fin(ys[i]) ? esc(fy(ys[i]) + unit) : '–'}</b>`;
-    return `<div class="card"><div class="card-h">${esc(label)}</div>${chartBox(Charts.curve(xs, ys, { fmtY: fy, fmtX: Core.fmtClock, xUnit: 60, cls, fill: true }), reader, first, 's')}</div>`;
+    const reader = (i) => {
+      const s = marks && spikeAt(xs[i]);
+      return `<span>${esc(Core.fmtClock(xs[i]))}</span><b>${fin(ys[i]) ? esc(fy(ys[i]) + unit) : '–'}</b>${s ? `<span class="end mk-t">Pulsspitze +${nf0.format(s.up)}</span>` : ''}`;
+    };
+    return `<div class="card"><div class="card-h">${esc(label)}</div>${chartBox(Charts.curve(xs, ys, { fmtY: fy, fmtX: Core.fmtClock, xUnit: 60, cls, fill: true, marks }), reader, first, 's')}</div>`;
   };
   const stat = (pts) => { const v = (pts || []).map((p) => p[1]); return v.length ? { avg: Core.mean(v), lo: Math.min(...v), hi: Math.max(...v), at: pts[v.indexOf(Math.min(...v))][0] } : null; };
   const hr = stat(n.hr), hrv = stat(n.hrv), ox = stat(n.spo2);
-  h += curve('hr', 'Puls', ' bpm', 'c-hr', hr ? `<span>Ø</span><b>${nf0.format(hr.avg)} bpm</b><span class="end">tiefster ${nf0.format(hr.lo)} um ${esc(Core.fmtClock(n.s0 + hr.at))}</span>` : '');
+  h += curve('hr', 'Puls', ' bpm', 'c-hr', hr ? `<span>Ø</span><b>${nf0.format(hr.avg)} bpm</b><span class="end">tiefster ${nf0.format(hr.lo)} um ${esc(Core.fmtClock(n.s0 + hr.at))}</span>` : '', spk.map((s) => n.s0 + s.at));
   h += curve('hrv', 'HRV', ' ms', 'c-hrv', hrv ? `<span>Ø</span><b>${nf0.format(hrv.avg)} ms</b><span class="end">${nf0.format(hrv.lo)}–${nf0.format(hrv.hi)} ms</span>` : '');
   const bb0 = n.bb && n.bb.length ? n.bb[0][1] : null, bb1 = n.bb && n.bb.length ? n.bb[n.bb.length - 1][1] : null;
   const bbTxt = fin(n.bbImp) ? `<span>in der Nacht</span><b>${n.bbImp > 0 ? '+' : ''}${nf0.format(n.bbImp)}</b>` : '';
@@ -1289,8 +1511,61 @@ function nightCurvesHtml(date, n) {
   if (!['hr', 'hrv', 'bb', 'spo2'].some((k) => g[k].filter(fin).length >= 3)) h += '<p class="note">Für diese Nacht hat Garmin keine Messreihen.</p>';
   if (n.unm) h += `<p class="note">${esc(Core.fmtDur(n.unm))} ließen sich keiner Phase zuordnen.</p>`;
   if (n.note) h += `<div class="hint">${ICON.info}<div class="grow"><strong>Deine Notiz</strong><span>${esc(n.note)}</span></div></div>`;
-  return h;
+  return h + nightPatternHtml(date, n, ev);
 }
+
+/** Was sich in dieser Nacht erkennen lässt: Pulsspitzen, ruhigste Strecke,
+    Pulstiefpunkt, Garmins unruhige Momente und — mit Phasenverlauf — der
+    Aufbau aus Zyklen. Jeweils gegen Deinen Schnitt, sobald es ihn gibt. */
+function nightPatternHtml(date, n, ev) {
+  if (!ev || !(ev.spikes || ev.low || ev.garmin || ev.struct)) return '';
+  const clock = (m) => Core.fmtClock(n.s0 + m);
+  const mins = (m) => Core.fmtDur(m * 60);
+  const avgOf = (key) => nightMean(date, (x) => (fin(x[key]) ? x[key] : null));
+  const rows = [];
+  let h = '<div class="sec-h">Unruhe und Aufbau</div><div class="card">';
+
+  if (ev.spikes) {
+    const k = ev.spikes.length, avg = avgOf('rm');
+    const st = avg == null ? '' : k <= avg - 1 ? 'good' : k >= avg + 2 ? 'warn' : '';
+    h += `<div class="np-h"><b class="num${st ? ' st-' + st : ''}">${nf0.format(k)}</b><span>${k === 1 ? 'Pulsspitze' : 'Pulsspitzen'}${avg != null ? ` · Dein Ø ${esc(meanFmt('rm', avg))}` : ''}</span></div>`;
+    if (k) {
+      h += `<div class="tchips">${ev.spikes.map((s) => `<span><b class="num">${esc(clock(s.at))}</b>+${nf0.format(s.up)}</span>`).join('')}</div>`;
+      const th = [0, 0, 0];
+      for (const s of ev.spikes) th[Math.min(2, Math.floor(s.at / (ev.len / 3)))]++;
+      if (k >= 2) rows.push(['Verteilung', `${th[0]} · ${th[1]} · ${th[2]}`, 'erstes, mittleres, letztes Drittel']);
+    } else {
+      h += '<p class="note" style="margin-top:4px">Kein kurzer Pulsanstieg — eine ruhige Nacht.</p>';
+    }
+  }
+  if (ev.calm && ev.calm.dur >= 30) rows.push(['Längste ruhige Strecke', mins(ev.calm.dur), `${clock(ev.calm.a)}–${clock(ev.calm.b)}`]);
+  if (ev.low) {
+    const p = ev.low.pct, avg = avgOf('hrLow');
+    const word = p <= 50 ? 'früh' : p <= 70 ? 'in der zweiten Hälfte' : 'spät';
+    rows.push(['Pulstiefpunkt', `${clock(ev.low.at)} · ${nf0.format(p)} %`, `${word}${avg != null ? ` · Dein Ø ${nf0.format(avg)} %` : ''}`, p <= 50 ? 'good' : p > 70 ? 'warn' : '']);
+  }
+  if (ev.garmin) rows.push(['Unruhige Momente', nf0.format(ev.garmin.n), 'laut Garmin, aus der Bewegung']);
+  const sv = ev.struct;
+  if (sv) {
+    if (sv.cycles) rows.push(['Schlafzyklen', nf0.format(sv.cycles), 'je mit REM-Phase, üblich 4–6']);
+    if (fin(sv.deepFirst)) rows.push(['Tiefschlaf in der 1. Hälfte', nf0.format(sv.deepFirst) + ' %', 'üblich: der größte Teil', sv.deepFirst >= 60 ? 'good' : 'warn']);
+    if (fin(sv.remLate)) rows.push(['REM in der 2. Hälfte', nf0.format(sv.remLate) + ' %', 'üblich: der größte Teil', sv.remLate >= 55 ? 'good' : '']);
+    if (fin(sv.firstDeep)) rows.push(['Erster Tiefschlaf nach', mins(sv.firstDeep), '']);
+    if (fin(sv.firstRem)) rows.push(['Erster REM-Schlaf nach', mins(sv.firstRem), 'üblich 1–2 h']);
+    rows.push(['Wach mitten in der Nacht', sv.wakes.length ? `${nf0.format(sv.wakes.length)}×` : 'nie', sv.wakes.length ? sv.wakes.map(([a]) => clock(a)).join(', ') : '']);
+  }
+  if (rows.length) {
+    h += `<div class="qrows np-rows">${rows.map(([l, v, sub, st]) => `<div><span>${esc(l)}${sub ? `<small>${esc(sub)}</small>` : ''}</span><b class="num${st ? ' st-' + st : ''}">${esc(v)}</b></div>`).join('')}</div>`;
+  }
+  if (ev.spikes) h += '<p class="note">Pulsspitze: Der Puls steigt für ein paar Minuten um mindestens 8 Schläge über seinen Verlauf — meist eine Weckreaktion oder kurzes Wachsein, an das Du Dich nicht erinnerst. Beim Einschlafen und Aufwachen zählt die App sie nicht. Pulstiefpunkt: wo der Puls über eine halbe Stunde gemittelt am tiefsten lag, in Prozent der Nacht.</p>';
+  else if (!ev.struct && !ev.garmin) h += '<p class="note">Für Pulsspitzen deckt der Puls zu wenig von der Nacht ab.</p>';
+  return h + '</div>';
+}
+
+/** Wie weit eine Kachel für seltene Werte zurückschaut. VO2max kommt nur
+    mit Läufen und Fahrten im Freien, im Winter oft wochenlang keine — 120
+    Tage wie im Fitness-Score. */
+const sparseDays = (key) => (key === 'vo2' ? 120 : 60);
 
 /** Kachel einer Kennzahl. Intensitätsminuten zählen als Woche gegen das
     Wochenziel, Belastung als 7-Tage-Summe — so, wie man darüber nachdenkt. */
@@ -1317,10 +1592,11 @@ function tile(key, date) {
       <span class="tile-d st-${st}">${ls ? esc(ls.text) : 'braucht 3 Wochen Daten'}</span>
       ${Charts.spark(vals, { band: ls ? [ls.chronic * 0.8, ls.chronic * 1.3] : null })}</button>`;
   }
-  // Seltene Werte (Gewicht): der letzte bekannte zählt
+  // Seltene Werte (Gewicht, VO2max): der letzte bekannte zählt
+  const look = sparseDays(key);
   let v = Core.value(db, idx, key, date), vDate = date;
   if (m.sparse && !fin(v)) {
-    for (let i = 1; i <= 60 && !fin(v); i++) { vDate = Core.addDays(date, -i); v = Core.value(db, idx, key, vDate); }
+    for (let i = 1; i <= look && !fin(v); i++) { vDate = Core.addDays(date, -i); v = Core.value(db, idx, key, vDate); }
   }
   const base = Core.baseline(db, idx, key, date, m.sparse ? 90 : 30, m.sparse ? 3 : 10);
   const partial = date === t && ACCUM.includes(key);
@@ -1330,7 +1606,7 @@ function tile(key, date) {
   else if (fin(v) && base) delta = `${Core.fmtDelta(key, v - base.mean)} zu Ø`;
   else if (fin(v)) delta = 'Normalbereich folgt';
   if (m.sparse && vDate !== date && fin(v)) delta = dayLabel(vDate);
-  const vals = Core.series(db, idx, key, Core.addDays(date, m.sparse ? -59 : -13), date);
+  const vals = Core.series(db, idx, key, Core.addDays(date, m.sparse ? 1 - look : -13), date);
   if (key === 'steps' && fin(v)) {
     const goal = (db.days[date] || {}).stepGoal;
     if (goal) {
@@ -1341,7 +1617,9 @@ function tile(key, date) {
         ${Charts.spark(vals, { band: base ? [base.lo, base.hi] : null })}</button>`;
     }
   }
-  return `<button class="tile" data-trend="${key}"><span class="tile-l">${esc(m.label)}${m.sparse ? ' · 60 Tage' : ''}</span>
+  // Den VO2max-Trend gibt es erst ab zwei Werten, davor zeigt Training den einen
+  const attr = key === 'vo2' && Object.keys(idx.vo2).length < 2 ? 'data-nav="training"' : `data-trend="${key}"`;
+  return `<button class="tile" ${attr}><span class="tile-l">${esc(m.label)}${m.sparse ? ` · ${look} Tage` : ''}</span>
     <span class="tile-v">${valHtml(key, v)}</span>
     <span class="tile-d st-${st || 'off'}">${esc(delta)}</span>
     ${Charts.spark(vals, { band: base && !m.sparse ? [base.lo, base.hi] : null, connect: m.sparse })}</button>`;
@@ -1406,6 +1684,9 @@ function availableMetrics() {
     if (k === 'im') { if (days.some((d) => d.imMod != null)) out.add(k); continue; }
     if (k === 'mid') { if (days.some((d) => fin(d.bed) && fin(d.wake))) out.add(k); continue; }
     if (k === 'debt') { if (days.filter((d) => fin(d.need) && fin(d.slp)).length >= 5) out.add(k); continue; }
+    if (k === 'deepPct' || k === 'remPct') { if (days.some((d) => fin(d[k.slice(0, -3)]) && d.slp > 0)) out.add(k); continue; }
+    // Nur aus ausgewerteten Nächten: erst ab ein paar Nächten ein eigener Chip
+    if (M[k].minN) { if (days.filter((d) => fin(d[k])).length >= M[k].minN) out.add(k); continue; }
     if (days.some((d) => fin(d[k]))) out.add(k);
   }
   return out;
@@ -1824,11 +2105,20 @@ function renderPatterns() {
   if (!Object.keys(db.days).length) { el.innerHTML = '<div class="empty"><h2>Noch keine Daten</h2><p>Für Muster braucht es ein paar Wochen Verlauf.</p></div>'; return; }
   const t = Core.today();
   const from = patRange ? Core.addDays(t, -(patRange - 1)) : firstDate();
+
+  // Zwei Reiter: Schlafmuster (sleep.js) und die Zusammenhänge einzelner Paare; der Zeitraum gilt für beide
+  let h = `<div class="seg top">${[['sleep', 'Schlaf'], ['pairs', 'Zusammenhänge']].map(([k, l]) => `<button class="${k === patTab ? 'on' : ''}" data-set="patTab:${k}">${l}</button>`).join('')}</div>`;
+  h += `<div class="seg sm">${PAT_RANGES.map(([r, l]) => `<button class="${r === patRange ? 'on' : ''}" data-set="patRange:${r}">${l}</button>`).join('')}</div>`;
+  if (patTab === 'sleep') {
+    el.innerHTML = h + sleepPatternsHtml(from, t);
+    const chips = $('.chips', el), on = $('.chip.on', el);
+    if (chips && on) chips.scrollLeft = on.offsetLeft - chips.clientWidth / 2 + on.offsetWidth / 2;
+    return;
+  }
+
   const res = Core.insights(db, idx, from, t);
   const ok = res.filter((r) => r.enough).sort((a, b) => (b.solid - a.solid) || (Math.abs(b.r) - Math.abs(a.r)));
   const few = res.filter((r) => !r.enough);
-
-  let h = `<div class="seg top">${PAT_RANGES.map(([r, l]) => `<button class="${r === patRange ? 'on' : ''}" data-set="patRange:${r}">${l}</button>`).join('')}</div>`;
   h += '<p class="note" style="margin:0 2px var(--sp-3)">Was hängt bei Dir womit zusammen? Die Tage werden nach der Ursache gedrittelt; verglichen wird das obere mit dem unteren Drittel. Oben steht, was am deutlichsten ist.</p>';
   if (!ok.length) h += '<div class="empty"><h2>Noch zu wenig Tage</h2><p>Jede Auswertung braucht mindestens 20 Tage mit beiden Werten. Ein längerer Zeitraum oder mehr Verlauf hilft.</p></div>';
 
@@ -1871,6 +2161,213 @@ function renderPatterns() {
   }
   h += '<p class="note">Ein Zusammenhang ist noch keine Ursache: Wer krank wird, trainiert weniger und hat trotzdem eine niedrige HRV. Die Auswertung zeigt, worauf es sich zu achten lohnt.</p>';
   el.innerHTML = h;
+}
+
+/* ── 10b. Schlafmuster ──────────────────────────────────────── */
+/* Gerechnet in sleep.js. Oben der Steckbrief: Die Nächte werden nach einer
+   Zielgröße gedrittelt, darunter steht, worin sich das obere vom unteren
+   Drittel unterscheidet — am Tag davor, in der Nacht, danach. Dann Phasen,
+   Unruhe und Wochentage. */
+
+const PF_GROUPS = [['before', 'Am Tag davor'], ['night', 'In der Nacht'], ['after', 'Danach']];
+const WEEKDAY_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+const pctTxt = (x) => nf0.format(x * 100) + '\u00a0%';
+const signed = (r, s) => (r > 0 ? '+' : r < 0 ? '−' : '±') + s;
+/** Mittel einer Kennzahl. Zählwerte immer mit einer Nachkommastelle — sonst stünde „2×“ neben „2,2×“. */
+const meanFmt = (k, v) => ((M[k] || {}).count && fin(v) ? nf1.format(v) + M[k].unit : Core.fmt(k, v));
+
+/** Wert einer Größe im Steckbrief: ja/nein als Anteil der Nächte, sonst wie die Kennzahl. */
+function pfVal(f, v) {
+  if (f.bin) return pctTxt(v);
+  if (f.k === 'load') return nf0.format(v);
+  if (f.k === 'napMin') return Core.fmtDur(v * 60);
+  return meanFmt(f.k, v);
+}
+/** Unterschied. Anteile und Prozentwerte in Prozentpunkten — „+12 %" sähe
+    nach einer relativen Änderung aus. */
+function pfDelta(f, d) {
+  const r = Math.round(f.bin ? d * 100 : d);
+  if (f.bin || (M[f.k] || {}).unit === '%') return signed(r, nf0.format(Math.abs(r)) + ' Pkt.');
+  if (f.k === 'load') return signed(r, nf0.format(Math.abs(r)));
+  if (f.k === 'napMin') return signed(r, Core.fmtDur(Math.abs(r) * 60));
+  return Core.fmtDelta(f.k, d);
+}
+
+function sleepPatternsHtml(from, t) {
+  const tgs = Sleep.targets(db, idx, from, t);
+  let h = '<p class="note" style="margin:0 2px var(--sp-3)">Was Deine Nächte prägt: worin sich unruhige von ruhigen Nächten unterscheiden, wovon Tief- und REM-Schlaf abhängen und wann in der Nacht die Unruhe kommt.</p>';
+  if (!tgs.length) {
+    h += `<div class="empty"><h2>Noch zu wenig Nächte</h2><p>Der Vergleich der Nächte braucht mindestens ${Sleep.MIN_NIGHTS} im Zeitraum. Ein längerer Zeitraum oder mehr Verlauf hilft.</p></div>`;
+  } else {
+    if (!tgs.some((x) => x.k === sleepTarget)) sleepTarget = tgs[0].k;
+    h += '<div class="sec-h">Was Deine Nächte unterscheidet</div>';
+    h += `<div class="chips">${tgs.map((x) => `<button class="chip${x.k === sleepTarget ? ' on' : ''}" data-set="sleepTarget:${x.k}">${esc(x.label)}</button>`).join('')}</div>`;
+    h += profileHtml(Sleep.profile(db, idx, sleepTarget, from, t));
+  }
+  return h + phasesHtml(from, t) + unrestHtml(from, t) + nightWeekHtml(from, t);
+}
+
+/** Steckbrief: obere gegen untere Nächte, die deutlichsten Unterschiede
+    zuerst, darunter alle deutlichen nach Tag davor / Nacht / danach. */
+function profileHtml(p) {
+  const tg = p.target;
+  if (!p.enough) return `<div class="card"><p class="note" style="margin:0">Für diesen Vergleich fehlen noch Nächte (${p.n} von mindestens ${Sleep.MIN_NIGHTS}, je Gruppe 6).</p></div>`;
+  const box = (hi) => {
+    const n = hi ? p.nHi : p.nLo, name = hi ? tg.hi : tg.lo;
+    if (tg.bin) return `<div><b>${nf0.format(n)}<small> Nächte</small></b><span>${esc(name)}<br>${hi ? 'Garmin: mittel oder schwach' : 'Garmin: gut oder besser'}</span></div>`;
+    const cut = hi ? `ab ${Core.fmt(tg.k, p.cutHi)}` : `bis ${Core.fmt(tg.k, p.cutLo)}`;
+    return `<div><b>Ø ${esc(meanFmt(tg.k, hi ? p.yHi : p.yLo))}</b><span>${esc(name)}<br>${esc(cut)} · ${nf0.format(n)} Nächte</span></div>`;
+  };
+  let h = `<div class="card pf"><div class="vs">${box(true)}${box(false)}</div>`;
+  const top = Sleep.headline(p, 3);
+  if (top.length) {
+    h += `<div class="pf-lead">${esc(tg.hi)}: am deutlichsten anders</div><div class="pf-top">${top.map((r) => `<div><b>${esc(r.diff > 0 ? r.f.more : r.f.less)}</b><span>${esc(pfVal(r.f, r.mH))} statt ${esc(pfVal(r.f, r.mL))}</span></div>`).join('')}</div>`;
+  } else {
+    h += '<p class="note">Am Tag davor und in der Nacht selbst unterscheidet sich im Zeitraum nichts so deutlich, dass es kein Zufall sein könnte.</p>';
+  }
+  const shown = p.rows.filter((r) => pfAll || r.solid);
+  if (shown.length) {
+    h += `<table class="pf-t"><thead><tr><th></th><th>${esc(tg.hiS)}</th><th>${esc(tg.loS)}</th><th>Unterschied</th></tr></thead><tbody>`;
+    for (const [g, gl] of PF_GROUPS) {
+      const rs = shown.filter((r) => r.f.g === g);
+      if (!rs.length) continue;
+      h += `<tr class="pf-g"><td colspan="4">${gl}</td></tr>`;
+      for (const r of rs) {
+        // Farbe nur, wo „mehr" klar besser oder schlechter ist
+        const dir = r.f.k === 'restlBad' ? -1 : (M[r.f.k] || {}).dir || 0;
+        const st = !r.solid || !dir ? '' : r.diff * dir > 0 ? 'good' : 'warn';
+        h += `<tr${r.solid ? '' : ' class="dim"'}><td>${esc(r.f.label)}</td><td>${esc(pfVal(r.f, r.mH))}</td><td>${esc(pfVal(r.f, r.mL))}</td><td${st ? ` class="st-${st}"` : ''}>${esc(pfDelta(r.f, r.diff))}</td></tr>`;
+      }
+    }
+    h += '</tbody></table>';
+  }
+  const weak = p.rows.filter((r) => !r.solid).length;
+  if (weak) h += `<button class="link" data-action="pfAll">${pfAll ? 'Nur deutliche Unterschiede zeigen' : `${weak} weitere Größen ohne deutlichen Unterschied zeigen`}</button>`;
+  h += `<p class="note">${tg.bin ? 'Verglichen werden die Nächte, deren Unruhe Garmin mittel oder schwach bewertet, mit den übrigen.' : 'Verglichen wird das Drittel Deiner Nächte mit den höchsten Werten mit dem Drittel mit den niedrigsten; bei Gleichstand sind die Gruppen etwas größer.'} Gezeigt ist, was sich deutlich unterscheidet — mit einer strengeren Grenze als bei den Zusammenhängen, weil ${p.rows.length} Größen auf einmal geprüft werden. „Danach“ ist der folgende Tag. Ein Unterschied ist noch keine Ursache.</p></div>`;
+  return h;
+}
+
+/** Phasen über viele Nächte: was eine Stunde mehr Schlaf bringt und wie oft
+    jede Phase in Garmins Idealbereich lag. */
+function phasesHtml(from, t) {
+  const g = Sleep.phaseGain(db, from, t);
+  const id = Sleep.ideal(db, (db.profile.sleep || {}).opt, from, t);
+  if (!(g && g.deep && g.light && g.rem) && !id) return '';
+  const ks = ['deep', 'light', 'rem'];
+  const mins = (v) => signed(Math.round(v), nf0.format(Math.abs(Math.round(v))) + ' min');
+  let h = '<div class="sec-h">Phasen</div>';
+  if (g && g.deep && g.light && g.rem) {
+    const tot = ks.reduce((s, k) => s + Math.max(0, g[k].slope), 0) || 1;
+    h += `<div class="card"><div class="card-h">Eine Stunde mehr Schlaf<span class="muted">${nf0.format(g.n)} Nächte</span></div>`;
+    // Gestapelt nur, wenn keine Phase mit mehr Schlaf weniger wird — negative Teile lassen sich nicht stapeln
+    if (ks.every((k) => g[k].slope >= 0)) h += `<div class="phases">${ks.map((k) => `<i class="ph-${k}" style="width:${(g[k].slope / tot) * 100}%"></i>`).join('')}</div>`;
+    h += `<div class="legend">${ks.map((k) => `<span><i class="ph-${k}"></i>${PHASE_LABEL[k]} <b>${esc(mins(g[k].slope))}</b></span>`).join('')}${g.awake ? `<span><i class="ph-awake"></i>dazu wach <b>${esc(mins(g.awake.slope))}</b></span>` : ''}</div>`;
+    const m = g.most;
+    h += m
+      ? `<p class="note">Kurze Nächte kosten Dich vor allem ${PHASE_LABEL[m.k]}: Eine Stunde weniger Schlaf sind etwa ${nf0.format(g[m.k].slope)} min weniger davon, obwohl er sonst nur ${nf0.format(g[m.k].share)} % Deines Schlafs ausmacht.</p>`
+      : '<p class="note">Eine Stunde mehr Schlaf verteilt sich bei Dir etwa so auf die Phasen wie Dein Schlaf sonst.</p>';
+    h += '<p class="note">Gerechnet über alle Nächte im Zeitraum: Wie viel mehr jeder Phase hattest Du in Nächten, die eine Stunde länger waren?</p></div>';
+  }
+  if (id) {
+    h += '<div class="card"><div class="card-h">Wie oft im Idealbereich<span class="muted">laut Garmin</span></div>';
+    for (const k of ks) {
+      const c = id[k];
+      if (!c) continue;
+      const w = (x) => (x / c.n) * 100;
+      h += `<div class="rg-row"><div class="rg-h"><b>${PHASE_LABEL[k]}</b><span class="muted">${nf0.format(c.opt[0])}–${nf0.format(c.opt[1])} %</span><span class="rg-v">${nf0.format(w(c.in))} % der Nächte</span></div>
+        <div class="rg">${['lo', 'in', 'hi'].map((z) => (c[z] ? `<i class="rg-${z}" style="width:${w(c[z])}%"></i>` : '')).join('')}</div></div>`;
+    }
+    h += '<div class="legend" style="margin-top:var(--sp-2)"><span><i class="rg-lo"></i>darunter</span><span><i class="rg-in"></i>im Bereich</span><span><i class="rg-hi"></i>darüber</span></div>';
+    const short = ['deep', 'rem'].filter((k) => id[k]).sort((a, b) => id[b].lo / id[b].n - id[a].lo / id[a].n)[0];
+    if (short && id[short].lo / id[short].n >= 0.4) {
+      h += `<p class="note">${PHASE_LABEL[short]} liegt in ${pctTxt(id[short].lo / id[short].n)} der Nächte unter Garmins Bereich. Wovon das bei Dir abhängt, zeigt oben der Vergleich „${short === 'deep' ? 'Tiefschlaf' : 'REM-Schlaf'}“.</p>`;
+    }
+    h += '<p class="note">Garmins Bereiche stammen aus der neuesten Nacht und gelten hier für den ganzen Zeitraum.</p></div>';
+  }
+  return h;
+}
+
+/** Unruhe über viele Nächte: wie oft aufgewacht, Garmins Bewertung, ob
+    unruhige Nächte gehäuft kommen und in welcher Stunde der Nacht die
+    Pulsspitzen liegen. */
+function unrestHtml(from, t) {
+  const u = Sleep.unrest(db, idx, from, t);
+  const hs = u.hours;
+  let h = '<div class="sec-h">Unruhe</div>';
+  if (u.awake) {
+    const a = u.awake;
+    const items = a.hist.map((c, i) => ({ label: i === 5 ? '5+' : String(i), v: (c / a.n) * 100 }));
+    const often = a.hist.slice(3).reduce((s, c) => s + c, 0) / a.n;
+    h += `<div class="card trend-bars"><div class="card-h">Aufgewacht pro Nacht<span class="muted">Ø ${esc(meanFmt('awakeN', a.avg))} · ${nf0.format(a.n)} Nächte</span></div>
+      ${Charts.bars(items, { fmtY: (v) => nf0.format(v) + ' %', values: true, noAxis: true, h: 110 })}
+      <p class="note">Anteil der Nächte nach Zahl der Aufwacher. In ${pctTxt(often)} der Nächte bist Du dreimal oder öfter aufgewacht.</p>`;
+    const s = u.streak;
+    if (s) {
+      h += `<div class="ins-h" style="margin-top:var(--sp-3)"><span class="badge ${s.solid ? 'deutlich' : ''}">${s.solid ? (s.pA > s.pB ? 'kommen gehäuft' : 'folgen selten aufeinander') : 'eher Zufall'}</span></div>
+        <div class="ins-t">Nach einer unruhigen Nacht (ab ${esc(Core.fmt('awakeN', s.cut))} aufgewacht) war die nächste in ${pctTxt(s.pA)} der Fälle wieder unruhig, nach anderen Nächten in ${pctTxt(s.pB)}.</div>`;
+      if (s.solid && s.pA > s.pB) h += '<p class="note">Unruhige Nächte kommen bei Dir in Serien. Oft steckt dann eine Phase dahinter — Stress, ein Infekt, viel Training — und nicht die einzelne Nacht.</p>';
+    }
+    h += '</div>';
+  }
+  if (u.garmin) {
+    const { q, n } = u.garmin;
+    h += `<div class="card"><div class="card-h">Garmins Bewertung der Unruhe<span class="muted">${nf0.format(n)} Nächte</span></div>
+      <div class="phases">${'EGFP'.split('').map((c) => (q[c] ? `<i class="q-${c}" style="width:${(q[c] / n) * 100}%"></i>` : '')).join('')}</div>
+      <div class="legend">${'EGFP'.split('').filter((c) => q[c]).map((c) => `<span><i class="q-${c}"></i>${Q_WORD[c]} <b>${pctTxt(q[c] / n)}</b></span>`).join('')}</div></div>`;
+  }
+  h += `<div class="card"><div class="card-h">Pulsspitzen je Nachtstunde${hs.nights ? `<span class="muted">${nf0.format(hs.nights)} Nächte</span>` : ''}</div>`;
+  if (hs.nights >= 10 && hs.hours.length >= 3) {
+    const items = hs.hours.map((x) => ({ label: `${x.h + 1}.`, v: x.rate, cur: !!hs.peak && x.h === hs.peak.h }));
+    const avg = Core.mean(Core.series(db, idx, 'rm', from, t).filter(fin));
+    h += Charts.bars(items, { fmtY: (v) => nf1.format(v), values: true, noAxis: true, h: 110 });
+    h += `<p class="note">Pulsspitzen je Nacht in der 1., 2., 3. … Stunde nach dem Einschlafen, im Schnitt ${esc(meanFmt('rm', avg))} pro Nacht.${hs.peak ? ` Am unruhigsten ist bei Dir die ${hs.peak.h + 1}. Stunde.` : ''} Eine Stunde zählt nur für die Nächte, die so lang waren.</p>`;
+  } else {
+    h += `<p class="note" style="margin:0">Pulsspitzen gibt es bisher für ${nf0.format(hs.nights)} ${hs.nights === 1 ? 'Nacht' : 'Nächte'} im Zeitraum. Die App wertet bei jedem Abgleich bis zu ${NIGHT_BATCH} weitere der letzten ${NIGHT_BACK} Tage aus, dazu jede Nacht, die Du öffnest. Ab 10 Nächten steht hier, wann in der Nacht die Unruhe kommt.</p>`;
+  }
+  return h + '</div>';
+}
+
+/** Nächte nach Wochentag als Tabelle, jede Zelle gegen Dein Mittel im
+    Zeitraum. Gefärbt wird erst, wenn der Unterschied größer ist als das, was
+    bei so wenigen Nächten je Wochentag ohnehin schwankt. */
+function nightWeekHtml(from, t) {
+  const COLS = [
+    ['slpScore', 'Score', (v) => nf0.format(v)],
+    ['slp', 'Dauer', (v) => splitVal('slp', v)[0]],
+    ['deepPct', 'Tief', (v) => nf0.format(v) + '%'],
+    ['remPct', 'REM', (v) => nf0.format(v) + '%'],
+    ['awakeN', 'Wach', (v) => meanFmt('awakeN', v)],
+  ];
+  const cols = [];
+  for (const [k, l, f] of COLS) {
+    const prof = Core.weekdayProfile(db, idx, k, from, t);
+    if (prof.some((p) => p.n < 3)) continue;
+    const all = Core.series(db, idx, k, from, t).filter(fin);
+    cols.push({ k, l, f, prof, mean: Core.mean(all), sd: Core.sd(all) || 0, dir: M[k].dir });
+  }
+  if (cols.length < 2) return '';
+  const mark = (c, p) => {
+    const lim = Math.max(0.25 * c.sd, (2 * c.sd) / Math.sqrt(p.n));
+    const d = p.v - c.mean;
+    return Math.abs(d) < lim ? 'ok' : d * c.dir > 0 ? 'good' : 'warn';
+  };
+  let h = `<div class="sec-h">Nach Wochentag<span class="muted">Mittel je Nacht</span></div><div class="card"><div class="wk-wrap"><table class="wk static"><thead><tr><th>Nacht auf</th>${cols.map((c) => `<th>${c.l}</th>`).join('')}</tr></thead><tbody>`;
+  for (let i = 0; i < 7; i++) {
+    h += `<tr><td>${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][i]}</td>`;
+    for (const c of cols) {
+      const p = c.prof[i];
+      h += fin(p.v) ? `<td class="st-${mark(c, p)}">${esc(c.f(p.v))}</td>` : '<td class="na">–</td>';
+    }
+    h += '</tr>';
+  }
+  h += '</tbody></table></div>';
+  const aw = cols.find((c) => c.k === 'awakeN');
+  if (aw) {
+    let w = 0;
+    aw.prof.forEach((p, i) => { if (p.v > aw.prof[w].v) w = i; });
+    if (mark(aw, aw.prof[w]) === 'warn') h += `<p class="note">Am unruhigsten sind bei Dir die Nächte auf ${WEEKDAY_LONG[w]}: Ø ${esc(meanFmt('awakeN', aw.prof[w].v))} aufgewacht, über alle Nächte Ø ${esc(meanFmt('awakeN', aw.mean))}.</p>`;
+  }
+  return h + '<p class="note">Farbig, wenn ein Wochentag deutlich besser oder schlechter ist als Dein Mittel. Die Nacht auf Samstag ist die von Freitag auf Samstag.</p></div>';
 }
 
 /* ── 11. Einstellungen ──────────────────────────────────────── */
@@ -2361,6 +2858,8 @@ function wire() {
     if (ac) { openActivity(ac.dataset.act); return; }
     const ng = e.target.closest('[data-night]');
     if (ng) { openNight(ng.dataset.night); return; }
+    const fi = e.target.closest('[data-fitness]');
+    if (fi) { openFitness(fi.dataset.fitness); return; }
     const dy = e.target.closest('[data-day]');
     if (dy) { dayView = dy.dataset.day === Core.today() ? null : dy.dataset.day; renderToday(); armBack(); return; }
     const ds = e.target.closest('[data-daystep]');
@@ -2380,6 +2879,8 @@ function wire() {
       else if (k === 'trainSport') { trainSport = v; trainShow = 30; }
       else if (k === 'bestScope') bestScope = v;
       else if (k === 'patRange') patRange = num;
+      else if (k === 'patTab') patTab = v;
+      else if (k === 'sleepTarget') { sleepTarget = v; pfAll = false; }
       render(); return;
     }
     const sc = e.target.closest('[data-scatter]');
@@ -2391,6 +2892,7 @@ function wire() {
       else if (act === 'settings') openSettings();
       else if (act === 'proxyGuide') openProxyGuide();
       else if (act === 'more') { trainShow += 30; render(); }
+      else if (act === 'pfAll') { pfAll = !pfAll; render(); }
     }
   });
   document.addEventListener('pointerdown', onChartPointer);

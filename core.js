@@ -388,7 +388,8 @@ const rowsOf = (arr, ti, vi) => (Array.isArray(arr) ? arr : []).filter(Array.isA
     Schlaffenster in keiner Antwort mitschickt. */
 function mapNight(raw, fb) {
   raw = raw || {};
-  let s = raw.sleep || {};
+  const env = raw.sleep || {};
+  let s = env;
   // Falls Garmin wie in Garmin Connect einen Umschlag mit Phasenverlauf schickt
   if (s.dailySleepDTO) s = Object.assign({}, s.dailySleepDTO, { sleepLevels: s.sleepLevels || s.dailySleepDTO.sleepLevels });
   const hv = raw.hrv || {}, sp = raw.spo2 || {};
@@ -450,6 +451,20 @@ function mapNight(raw, fb) {
   }
   lv.sort((x, y) => x[0] - y[0]);
 
+  // Unruhige Momente, wie Garmin Connect sie aus der Bewegung zählt: ebenfalls
+  // nicht in der Beschreibung der Personal API. Kommen sie doch, zeigt die App sie.
+  const rmList = env.sleepRestlessMoments || s.sleepRestlessMoments;
+  let rmg;
+  if (Array.isArray(rmList)) {
+    rmg = [];
+    for (const r of rmList) {
+      const x = tsMs(r && (r.startGMT != null ? r.startGMT : r.startTimeGMT));
+      if (x != null && x >= t0 && x <= t1) rmg.push(Math.round((x - t0) / 60000));
+    }
+    rmg.sort((x, y) => x - y);
+  }
+  const rmgN = num(env.restlessMomentsCount != null ? env.restlessMomentsCount : s.restlessMomentsCount);
+
   const naps = [];
   for (const n of Array.isArray(s.dailyNapDTOS) ? s.dailyNapDTOS : []) {
     const st = n && tsMs(n.napStartTimestampGMT), d = n && num(n.napTimeSec);
@@ -461,8 +476,10 @@ function mapNight(raw, fb) {
   // Uhrzeit des Einschlafens auf der Achse von mapSleep (nach Mitternacht + 1440)
   const md = Math.floor(((((t0 + off * 60000) % DAY_MS) + DAY_MS) % DAY_MS) / 60000);
   return clean({
-    v: 1, t0, t1, off, s0: md < 12 * 60 ? md + 1440 : md, len: Math.round((t1 - t0) / 60000),
+    v: 2, t0, t1, off, s0: md < 12 * 60 ? md + 1440 : md, len: Math.round((t1 - t0) / 60000),
     hr, hrv, bb, spo2, lv, naps, bbImp: bbImp == null ? undefined : bbImp,
+    // Leere Liste heißt „Garmin hat gezählt: keine"; clean würde sie verwerfen
+    rmg: rmg && rmg.length ? rmg : undefined, rmgN: fin(rmgN) ? rmgN : rmg ? rmg.length : undefined,
     unm: num(s.unmeasurableSleepSeconds) || undefined,
     note: typeof s.userNote === 'string' && s.userNote.trim() ? s.userNote.trim().slice(0, 500) : undefined,
   });
@@ -519,12 +536,19 @@ const METRICS = {
   light: { label: 'Leichtschlaf', group: 'Schlaf', fmt: 'dur', dir: 0 },
   rem: { label: 'REM-Schlaf', group: 'Schlaf', fmt: 'dur', dir: 1 },
   awake: { label: 'Wach in der Nacht', group: 'Schlaf', fmt: 'dur', dir: -1, hint: 'Zeit zwischen Einschlafen und Aufwachen, in der Du wach warst' },
+  awakeN: { label: 'Aufgewacht', group: 'Schlaf', unit: '×', count: true, dir: -1, hint: 'Wie oft Du laut Garmin in der Nacht aufgewacht bist' },
+  deepPct: { label: 'Tiefschlaf-Anteil', group: 'Schlaf', unit: '%', dir: 1, hint: 'Anteil am Schlaf ohne Wachzeit' },
+  remPct: { label: 'REM-Anteil', group: 'Schlaf', unit: '%', dir: 1, hint: 'Anteil am Schlaf ohne Wachzeit' },
   bed: { label: 'Einschlafzeit', group: 'Schlaf', fmt: 'clock', dir: 0 },
   wake: { label: 'Aufwachzeit', group: 'Schlaf', fmt: 'clock', dir: 0 },
   mid: { label: 'Schlafmitte', group: 'Schlaf', fmt: 'clock', dir: 0, hint: 'Mitte zwischen Einschlafen und Aufwachen. Wandert sie, wandert Dein Rhythmus' },
   debt: { label: 'Schlafsaldo 7 Nächte', group: 'Schlaf', fmt: 'min', dir: 1, noBand: true, hint: 'Geschlafen minus Garmins Schlafbedarf, zusammengezählt über die letzten sieben Nächte. Unter null heißt: Dir fehlt Schlaf' },
   slpHr: { label: 'Puls im Schlaf', group: 'Schlaf', unit: 'bpm', dir: -1 },
   slpStress: { label: 'Stress im Schlaf', group: 'Schlaf', dir: -1, hint: 'Mittel über die Nacht, 0–100' },
+  // Die drei folgenden gibt es nur für Nächte, deren Messreihen die App geladen hat (sleep.js)
+  rm: { label: 'Pulsspitzen', group: 'Schlaf', unit: '×', count: true, dir: -1, minN: 7, hint: 'Kurze Pulsanstiege im Schlaf, meist eine Weckreaktion, an die Du Dich nicht erinnerst. Nur für Nächte, deren Kurven die App geladen hat' },
+  rmG: { label: 'Unruhige Momente', group: 'Schlaf', unit: '×', count: true, dir: -1, minN: 7, hint: 'Garmins Zählung aus der Bewegung' },
+  hrLow: { label: 'Pulstiefpunkt', group: 'Schlaf', unit: '%', dir: -1, minN: 7, hint: 'Wann in der Nacht Dein Puls am tiefsten war, in Prozent der Schlafzeit. Früh heißt meist: Der Körper kam schnell zur Ruhe' },
   hrv: { label: 'HRV', group: 'Erholung', unit: 'ms', dir: 1 },
   rhr: { label: 'Ruhepuls', group: 'Erholung', unit: 'bpm', dir: -1 },
   bbMax: { label: 'Body Battery', group: 'Erholung', dir: 1, hint: 'Höchstwert des Tages, meist am Morgen' },
@@ -570,19 +594,23 @@ function fmt(key, v, bare) {
   if (m.fmt === 'dur') return fmtDur(v);
   if (m.fmt === 'min') return fmtDur(v * 60);
   if (m.fmt === 'clock') return fmtClock(v);
+  // Zählwerte: „3×" für eine Nacht, „2,4×" für ein Mittel
+  if (m.count) { const c = fmtCount(v); return bare ? c : c + m.unit; }
   const s = nfx(m.dec).format(v);
   return bare || !m.unit ? s : `${s} ${m.unit}`;
 }
+const fmtCount = (v) => (Math.abs(v - Math.round(v)) < 0.05 ? nf0 : nf1).format(v);
 /** Unterschied zweier Werte als „+12 min", „−3 bpm", „+0:40 h". */
 function fmtDelta(key, d) {
   if (!fin(d)) return '';
   const m = METRICS[key] || {};
   const a = Math.abs(d);
   // Vorzeichen erst nach dem Runden: +0,3 bpm angezeigt als „+0 bpm" sähe nach Veränderung aus
-  const shown = m.fmt === 'dur' ? Math.round(a / 60) : m.dec ? Math.round(a * 10) : Math.round(a);
+  const shown = m.fmt === 'dur' ? Math.round(a / 60) : m.dec || m.count ? Math.round(a * 10) : Math.round(a);
   const sign = !shown ? '±' : d > 0 ? '+' : '−';
   let s;
-  if (m.fmt === 'dur') s = fmtDur(a);
+  if (m.count) s = fmtCount(a) + m.unit;
+  else if (m.fmt === 'dur') s = fmtDur(a);
   else if (m.fmt === 'min') s = fmtDur(a * 60);
   else if (m.fmt === 'clock') s = a < 60 ? Math.round(a) + ' min' : fmtDur(a * 60);
   else s = nfx(m.dec).format(a) + (m.unit ? ' ' + m.unit : '');
@@ -639,6 +667,11 @@ function value(db, idx, key, date) {
     // Aufwachen liegt auf dem Tag selbst, Einschlafen auf der Achse ab Mitternacht davor
     case 'mid': return d && fin(d.bed) && fin(d.wake) ? (d.bed + d.wake + 1440) / 2 : undefined;
     case 'debt': { const x = sleepDebt(db, date); return x ? x.sum : undefined; }
+    // Anteil am Schlaf ohne Wachzeit, wie Garmin ihn bewertet
+    case 'deepPct': case 'remPct': {
+      const v = d && d[key.slice(0, -3)];
+      return fin(v) && d.slp > 0 ? (v / d.slp) * 100 : undefined;
+    }
     default: return d ? d[key] : undefined;
   }
 }
@@ -807,6 +840,133 @@ function loadSeries(db, idx, from, to) {
     out.push({ date: addDays(start, i), acute: a, chronic: c });
   }
   return out;
+}
+
+/* ── 8b. Fitness-Score ──────────────────────────────────────── */
+/* Wie fit bist Du gerade? Die Erholung oben ist die Tagesform; der Score
+   ist der Stand der vier Wochen davor, 0–100, aus fünf Teilen mit festen
+   Gewichten. Jeder Teil misst gegen einen festen Maßstab, nicht gegen
+   Deinen eigenen Schnitt — sonst läge jeder immer bei der Mitte. Fehlt ein
+   Teil, zählen die übrigen anteilig mehr. */
+
+/* Garmins VO2max-Einstufung (nach dem Cooper Institute): Untergrenzen von
+   „mittel", „gut", „sehr gut" und „überragend" je Altersgruppe 20–29 bis
+   70–79. Laut Garmin entspricht das dem 40., 60., 80. und 95. Perzentil. */
+const VO2_NORM = {
+  m: [[41.7, 45.4, 51.1, 55.4], [40.5, 44.0, 48.3, 54.0], [38.5, 42.4, 46.4, 52.5],
+    [35.6, 39.2, 43.4, 48.9], [32.3, 35.5, 39.5, 45.7], [29.4, 32.3, 36.7, 42.1]],
+  f: [[36.1, 39.5, 43.9, 49.6], [34.4, 37.8, 42.4, 47.4], [33.0, 36.3, 39.7, 45.3],
+    [30.1, 33.0, 36.7, 41.1], [27.5, 30.0, 33.0, 37.8], [25.9, 28.1, 30.9, 36.7]],
+};
+const VO2_PCT = [40, 60, 80, 95];
+
+/** Grenzen für Alter und Geschlecht. Zwischen den Altersgruppen gleitend,
+    damit der Score am Geburtstag nicht springt. Ohne Geschlecht das Mittel
+    beider Tabellen, ohne Alter 35 — beides nur ungefähr. */
+function vo2Norm(age, sex) {
+  const rows = sex === 'm' || sex === 'f' ? VO2_NORM[sex]
+    : VO2_NORM.m.map((r, i) => r.map((v, j) => (v + VO2_NORM.f[i][j]) / 2));
+  const p = Math.max(0, Math.min(5, ((fin(age) ? age : 35) - 25) / 10));
+  const i = Math.min(4, Math.floor(p)), k = p - i;
+  return rows[i].map((v, j) => v + (rows[i + 1][j] - v) * k);
+}
+
+/** Perzentil der VO2max in der eigenen Gruppe: zwischen Garmins Grenzen
+    linear, darunter mit 2,5 Breiten von „mittel" bis 0, darüber bis 100. */
+function vo2Percentile(v, norm) {
+  const lo = norm[0] - 2.5 * (norm[1] - norm[0]);
+  const hi = norm[3] + (norm[3] - norm[2]) / 3;
+  return pieces(v, [[lo, 0]].concat(norm.map((t, i) => [t, VO2_PCT[i]]), [[hi, 100]]));
+}
+
+/** Stückweise lineare Kurve durch [x, y]-Punkte (x aufsteigend), außen gekappt. */
+function pieces(v, pts) {
+  if (v <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+    if (v <= x1) return y0 + ((v - x0) / ((x1 - x0) || 1)) * (y1 - y0);
+  }
+  return pts[pts.length - 1][1];
+}
+
+/* Maßstäbe der übrigen Teile. Intensitätsminuten (intensive doppelt, wie
+   Garmin zählt): die WHO empfiehlt 150–300 pro Woche. Schritte: der Nutzen
+   für die Gesundheit flacht laut großen Auswertungen ab etwa 8000–10 000
+   ab. Ruhepuls: im Mittel 60–70, gut Trainierte unter 50. Aktive Tage:
+   Tage mit mindestens 20 Minuten Training oder 30 Intensitätsminuten. */
+const FIT_PARTS = [
+  { key: 'vo2', label: 'VO2max', w: 35 },
+  { key: 'im', label: 'Intensität', w: 25 },
+  { key: 'rhr', label: 'Ruhepuls', w: 15 },
+  { key: 'steps', label: 'Schritte', w: 15 },
+  { key: 'days', label: 'Aktive Tage', w: 10 },
+];
+const FIT_SCALE = {
+  im: [[0, 0], [75, 30], [150, 60], [300, 85], [450, 100]],
+  rhr: [[44, 100], [52, 85], [62, 60], [72, 30], [85, 0]],
+  steps: [[2000, 0], [5000, 35], [7500, 65], [10000, 85], [12500, 100]],
+  days: [[0, 0], [1, 25], [3, 65], [5, 100]],
+};
+const FIT_LEVELS = [[85, 'Ausgezeichnet', 'good'], [70, 'Sehr gut', 'good'], [55, 'Gut', 'ok'], [40, 'Mittel', 'ok'], [0, 'Ausbaufähig', 'warn']];
+
+/** Fitness-Score an einem Tag aus den 28 Tagen davor (der Tag selbst zählt
+    nicht, er ist morgens erst angefangen). VO2max: der letzte Wert der
+    letzten 120 Tage, der Tag selbst eingeschlossen. `me`: { age, sex }.
+    Ab drei Teilen gibt es einen Score, sonst score: null. */
+function fitness(db, idx, date, me) {
+  me = me || {};
+  const from = addDays(date, -28), to = addDays(date, -1);
+  const days = dateRange(from, to);
+  const known = days.filter((d) => hasDay(db, d)).length;
+  const parts = [];
+
+  let vo2Date = null;
+  for (let i = 0; i <= 120 && !vo2Date; i++) { const d = addDays(date, -i); if (fin(idx.vo2[d])) vo2Date = d; }
+  if (vo2Date) {
+    const v = idx.vo2[vo2Date], norm = vo2Norm(me.age, me.sex);
+    parts.push({ key: 'vo2', value: v, date: vo2Date, norm, score: vo2Percentile(v, norm), approx: !(fin(me.age) && me.sex) });
+  }
+  const im = days.map((d) => value(db, idx, 'im', d)).filter(fin);
+  if (im.length >= 21) {
+    const wk = sum(im) / im.length * 7;
+    parts.push({ key: 'im', value: wk, score: pieces(wk, FIT_SCALE.im) });
+  }
+  const rhr = days.map((d) => value(db, idx, 'rhr', d)).filter(fin);
+  if (rhr.length >= 10) {
+    const v = median(rhr);
+    // Frauen haben im Mittel einen etwa drei Schläge höheren Ruhepuls
+    parts.push({ key: 'rhr', value: v, score: pieces(me.sex === 'f' ? v - 3 : v, FIT_SCALE.rhr) });
+  }
+  const steps = days.map((d) => value(db, idx, 'steps', d)).filter(fin);
+  if (steps.length >= 14) {
+    const v = median(steps);
+    parts.push({ key: 'steps', value: v, score: pieces(v, FIT_SCALE.steps) });
+  }
+  if (known >= 21) {
+    const act = days.filter((d) => (idx.trainMin[d] || 0) >= 20 || (value(db, idx, 'im', d) || 0) >= 30).length;
+    const wk = act / known * 7;
+    parts.push({ key: 'days', value: wk, score: pieces(wk, FIT_SCALE.days) });
+  }
+
+  for (const p of parts) {
+    const def = FIT_PARTS.find((x) => x.key === p.key);
+    p.label = def.label; p.w = def.w; p.score = Math.round(p.score);
+  }
+  parts.sort((a, b) => b.w - a.w);
+  const missing = FIT_PARTS.filter((x) => !parts.some((p) => p.key === x.key)).map((x) => x.key);
+  if (parts.length < 3) return { score: null, parts, missing };
+  const wsum = sum(parts.map((p) => p.w));
+  for (const p of parts) p.share = p.w / wsum;
+  const score = Math.round(sum(parts.map((p) => p.score * p.share)));
+  const lv = FIT_LEVELS.find((l) => score >= l[0]);
+  // Wo am meisten zu holen ist: größter gewichteter Abstand zu 100
+  const next = parts.slice().sort((a, b) => (100 - b.score) * b.share - (100 - a.score) * a.share)[0];
+  return { score, label: lv[1], status: lv[2], parts, missing, next: next.score < 85 ? next.key : null };
+}
+
+/** Score für jeden Tag des Zeitraums (null, wo er fehlt), für die Kurve. */
+function fitnessSeries(db, idx, from, to, me) {
+  return dateRange(from, to).map((d) => fitness(db, idx, d, me).score);
 }
 
 /* ── 9. Zusammenhänge ───────────────────────────────────────── */
@@ -1002,6 +1162,7 @@ return {
   METRICS, GROUPS, fmt, fmtDelta, fmtDur, fmtClock,
   actLoad, buildIndex, value, hasDay, series, rollingBand,
   baseline, judge, readiness, loadStatus, loadSeries,
+  FIT_PARTS, FIT_SCALE, vo2Norm, vo2Percentile, fitness, fitnessSeries,
   PAIRS, relate, insights, strengthOf,
   aggregate, weekdayProfile, periodStats, SPORTS, sportOf, typeLabel, trainingWeeks, bestEfforts,
 };
