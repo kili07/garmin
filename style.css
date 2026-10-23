@@ -342,6 +342,47 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; backgrou
 .phases{display:flex; height:12px; border-radius:6px; overflow:hidden; background:var(--line); margin:var(--sp-3) 0 6px}
 .phases i{display:block; height:100%}
 .ph-deep{background:var(--ph-deep)} .ph-light{background:var(--ph-light)} .ph-rem{background:var(--ph-rem)} .ph-awake{background:var(--ph-awake)}
+/* Dieselben Klassen in Diagrammen (Phasenverlauf, gestapelte Balken) */
+rect.ph-deep{fill:var(--ph-deep)} rect.ph-light{fill:var(--ph-light)} rect.ph-rem{fill:var(--ph-rem)} rect.ph-awake{fill:var(--ph-awake)}
+.card-h > svg.chev{width:18px; height:18px; color:var(--muted); flex:none; align-self:center; margin-left:-4px}
+.card-h .muted + svg.chev{margin-left:0}
+
+/* ── Eine Nacht im Detail ───────────────────────────────────── */
+.sheet-nav{margin:-6px -8px var(--sp-3)}
+.sheet-nav strong{font-size:14px; line-height:1.3}
+.sheet-nav strong .muted{font-weight:500; white-space:nowrap}
+.sl-facts b.st-good{color:var(--up)} .sl-facts b.st-warn{color:var(--warn)} .sl-facts b.st-bad{color:var(--down)}
+.sl-fb{margin-top:var(--sp-3); padding-top:var(--sp-3); border-top:1px solid var(--line); display:flex; flex-direction:column; gap:2px; font-size:14px}
+.sl-fb span{color:var(--text-2); font-size:13.5px}
+.ph-row + .ph-row{margin-top:var(--sp-4)}
+.ph-h{display:flex; align-items:baseline; gap:8px; font-size:14px}
+.ph-h > i{width:10px; height:10px; border-radius:3px; flex:none; align-self:center}
+.ph-h > b{font-weight:700}
+.ph-v{margin-left:auto; font-weight:700; white-space:nowrap}
+.ph-v small{font-size:12px; font-weight:600; color:var(--text-2); margin-left:6px}
+.ph-h .q{font-size:12px; font-weight:700; min-width:84px; text-align:right; white-space:nowrap}
+.ph-bar{position:relative; height:10px; border-radius:5px; background:var(--line); margin:6px 0 4px}
+.ph-bar > i{position:absolute; left:0; top:0; bottom:0; border-radius:5px}
+/* Idealbereich als heller Streifen hinter dem Balken, Dein Schnitt als Strich darüber */
+.ph-opt{position:absolute; top:-3px; bottom:-3px; border-radius:4px; background:var(--up-soft); border:1px solid var(--up)}
+.ph-avg{position:absolute; top:-4px; bottom:-4px; width:2px; margin-left:-1px; border-radius:1px; background:var(--text)}
+.ph-sub{font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums}
+.legend i.l-opt{background:var(--up-soft); border:1px solid var(--up)}
+.legend i.l-mark{width:2px; border-radius:1px; background:var(--text)}
+.qrows > div,.qrow-1{display:flex; align-items:baseline; gap:8px; padding:6px 0; font-size:14px}
+.qrows > div + div{border-top:1px solid var(--line)}
+.qrows span,.qrow-1 span{flex:1; color:var(--text-2)}
+.qrows b,.qrow-1 b{font-weight:700}
+.qrows em{font-style:normal; font-size:12px; font-weight:700; min-width:84px; text-align:right}
+.debt{display:grid; grid-template-columns:repeat(7,1fr); gap:3px; margin-top:var(--sp-3)}
+.debt > div{display:flex; flex-direction:column; align-items:center; gap:1px; padding:6px 0; border-radius:var(--r-xs); background:var(--surface)}
+.debt > div.sel{background:var(--accent-soft)}
+.debt span{font-size:11px; font-weight:600; color:var(--muted)}
+.debt b{font-size:12.5px; font-variant-numeric:tabular-nums; white-space:nowrap}
+.debt .st-good b{color:var(--up)} .debt .st-warn b{color:var(--warn)} .debt .st-bad b{color:var(--down)} .debt .na b{color:var(--muted); font-weight:400}
+.rd-ph{display:inline-flex; align-items:center; gap:3px; font-variant-numeric:tabular-nums; white-space:nowrap}
+.rd-ph i{width:8px; height:8px; border-radius:2px; display:inline-block}
+.readout:has(.rd-ph){flex-wrap:wrap; column-gap:10px}
 .legend{display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; font-size:12px; color:var(--muted)}
 .legend span{display:inline-flex; align-items:center; gap:5px; white-space:nowrap}
 .legend i{width:10px; height:10px; border-radius:3px; display:inline-block; flex:none}
@@ -419,6 +460,10 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; backgrou
 .area{fill:var(--band)}
 .ln-c.c-hr{stroke:var(--z5)} .area.c-hr{fill:var(--down-soft)}
 .ln-c.c-alt{stroke:var(--text-2)} .area.c-alt{fill:var(--surface-2)}
+/* Nachtkurven: Farbe der Linie, Fläche derselbe Ton nur blass */
+.ln-c.c-hrv{stroke:var(--ph-rem)} .area.c-hrv{fill:var(--ph-rem); fill-opacity:.14}
+.ln-c.c-bb{stroke:var(--up)} .area.c-bb{fill:var(--up-soft)}
+.ln-c.c-spo2{stroke:var(--ph-light)} .area.c-spo2{fill:var(--ph-light); fill-opacity:.14}
 
 /* Strecke */
 .track{width:100%; height:auto; background:var(--surface-2); border-radius:var(--r-sm)}

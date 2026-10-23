@@ -11,6 +11,7 @@
    1. Datum
    2. Statistik
    3. Garmin-Antworten → Tageswerte und Aktivitäten
+   3b. Eine Nacht im Detail (Messreihen der Schlafzeit)
    4. Kennzahlen: Bezeichnung, Einheit, Formatierung, Richtung
    5. Index: Werte, die aus mehreren Quellen zusammenkommen
    6. Normalbereich und Bewertung
@@ -179,14 +180,64 @@ function mapDaily(s) {
   };
 }
 
+/* Garmins Teilbewertungen des Schlafscores, gespeichert als ein Buchstabe je
+   Teil in dieser Reihenfolge: 'E' ausgezeichnet, 'G' gut, 'F' mittel,
+   'P' schwach, '-' fehlt — also "GEGFEGG" statt sieben Objekten. Der
+   Speicher von localStorage gehört allen Apps auf derselben Adresse. */
+const SLEEP_PARTS = [
+  ['dur', 'totalDuration'], ['deep', 'deepPercentage'], ['light', 'lightPercentage'], ['rem', 'remPercentage'],
+  ['restl', 'restlessness'], ['awk', 'awakeCount'], ['str', 'stress'],
+];
+/** Teilbewertung aus dem gespeicherten Kürzel: 'E', 'G', 'F', 'P' oder null. */
+function sleepPart(sq, part) {
+  const i = SLEEP_PARTS.findIndex((p) => p[0] === part);
+  const c = typeof sq === 'string' && i >= 0 ? sq.charAt(i) : '';
+  return 'EGFP'.includes(c) && c ? c : null;
+}
+/* Einflüsse auf Garmins Schlafbedarf: t Training, s Schlaf der letzten
+   Nächte, h HRV, n Nickerchen. Die Doku nennt die Felder nur „Code"; neutral
+   ist, was fehlt, 0 ist oder nach „keine Änderung" klingt. */
+const NEED_FACTORS = [['t', 'trainingFeedback'], ['s', 'sleepHistoryAdjustment'], ['h', 'hrvAdjustment'], ['n', 'napAdjustment']];
+const NEUTRAL = /^(0|NONE|NO_?CHANGE.*|NO_?ADJUSTMENT|NEUTRAL|BALANCED|NORMAL|INVALID|NOT_?AVAILABLE)$/i;
+/** Garmins Klartext-Schlüssel nur, wenn er etwas aussagt. */
+const keyOrNone = (v) => (typeof v === 'string' && v && !/^(NONE|INVALID|NOT_AVAILABLE)$/.test(v) ? v : undefined);
+
+/** Minuten aus Garmins Schlafbedarf; ein Wert über 2000 kann nur Sekunden sein. */
+const needMin = (v) => { v = num(v); return v ? (v > 2000 ? Math.round(v / 60) : v) : undefined; };
+
 /** DailySleepDTO aus /sleep-service/sleep/dailySleepSummariesByDate.
-    calendarDate ist der Morgen des Aufwachens — die Nacht davor. */
+    calendarDate ist der Morgen des Aufwachens — die Nacht davor.
+    `ref` trägt, was nicht zur Nacht gehört, sondern zum aktuellen Stand:
+    Garmins Idealbereiche der Phasen, der Bedarf für die kommende Nacht und
+    das empfohlene Schlaffenster. Die App merkt sich davon nur den neuesten. */
 function mapSleep(s) {
   if (!s || !s.calendarDate) return null;
-  const sc = (s.sleepScores && s.sleepScores.overall) || {};
+  const scores = (s.sleepScores && typeof s.sleepScores === 'object') ? s.sleepScores : {};
+  const sc = scores.overall || {};
   const start = localParts(s.sleepStartTimestampLocal), end = localParts(s.sleepEndTimestampLocal);
-  const need = s.sleepNeed && num(s.sleepNeed.actual);
+  const sn = s.sleepNeed || {};
   const total = num(s.sleepTimeSeconds);
+  const sq = SLEEP_PARTS.map(([, k]) => {
+    const q = String((scores[k] || {}).qualifierKey || '').charAt(0).toUpperCase();
+    return 'EGFP'.includes(q) && q ? q : '-';
+  }).join('');
+  const adj = NEED_FACTORS.filter(([, k]) => sn[k] != null && sn[k] !== '' && !NEUTRAL.test(String(sn[k]))).map(([c]) => c).join('');
+  const brth = String(s.breathingDisruptionSeverity || '').toUpperCase();
+
+  const ref = {};
+  const opt = {};
+  for (const [p, k] of [['deep', 'deepPercentage'], ['light', 'lightPercentage'], ['rem', 'remPercentage']]) {
+    const x = scores[k] || {};
+    if (fin(num(x.optimalStart)) && fin(num(x.optimalEnd)) && num(x.optimalEnd) > 0) opt[p] = [num(x.optimalStart), num(x.optimalEnd)];
+  }
+  if (Object.keys(opt).length) ref.opt = opt;
+  const nx = s.nextSleepNeed || {};
+  if (needMin(nx.actual)) ref.next = clean({ need: needMin(nx.actual), lo: num(nx.recommendedBedtimeStartMins), hi: num(nx.recommendedBedtimeEndMins) });
+  const al = s.sleepAlignment || {};
+  if (fin(num(al.optimalSleepWindowStartMins)) && fin(num(al.optimalSleepWindowEndMins))) {
+    ref.win = { lo: num(al.optimalSleepWindowStartMins), hi: num(al.optimalSleepWindowEndMins) };
+  }
+
   return {
     date: String(s.calendarDate).slice(0, 10),
     v: clean({
@@ -200,10 +251,15 @@ function mapSleep(s) {
       wake: end ? end.min : undefined,
       slpHr: num(s.avgHeartRate), slpStress: num(s.avgSleepStress),
       slpResp: num(s.averageRespirationValue), slpSpo2: num(s.averageSpO2Value),
+      respLo: num(s.lowestRespirationValue), respHi: num(s.highestRespirationValue),
+      spo2Lo: num(s.lowestSpO2Value) || undefined,
       awakeN: num(s.awakeCount),
-      // Schlafbedarf kommt in Minuten; ein Wert über 2000 kann nur Sekunden sein
-      need: need ? (need > 2000 ? Math.round(need / 60) : need) : undefined,
+      need: needMin(sn.actual), needBase: needMin(sn.baseline), needAdj: adj || undefined,
+      sq: /[EGFP]/.test(sq) ? sq : undefined,
+      slpFb: keyOrNone(s.sleepScoreFeedback), slpIns: keyOrNone(s.sleepScoreInsight),
+      brth: ['LOW', 'MEDIUM', 'HIGH'].includes(brth) ? brth : undefined,
     }),
+    ref: Object.keys(ref).length ? ref : undefined,
   };
 }
 
@@ -285,10 +341,171 @@ const FIELDS = {
     'imGoal', 'stress', 'stressMax', 'sRest', 'sLow', 'sMed', 'sHigh', 'bbMax', 'bbMin', 'bbChg', 'bbDrn', 'bbNow',
     'resp', 'spo2'],
   sleep: ['slp', 'deep', 'light', 'rem', 'awake', 'nap', 'slpScore', 'slpQ', 'bed', 'wake', 'slpHr', 'slpStress',
-    'slpResp', 'slpSpo2', 'awakeN', 'need'],
+    'slpResp', 'slpSpo2', 'respLo', 'respHi', 'spo2Lo', 'awakeN', 'need', 'needBase', 'needAdj', 'sq', 'slpFb', 'slpIns', 'brth'],
   hrv: ['hrv', 'hrvWeek', 'hrv5', 'hrvLo', 'hrvHi', 'hrvSt'],
   weight: ['weight', 'fat', 'bmi', 'muscle'],
 };
+
+/* ── 3b. Eine Nacht im Detail ───────────────────────────────── */
+/* Für die Detailansicht einer Nacht holt die App Garmins Messreihen der
+   beiden Kalendertage (Puls, HRV, Body Battery, SpO2) und schneidet die
+   Schlafzeit heraus. Gespeichert wird kompakt: [Minute seit Einschlafen, Wert]. */
+
+/** Zeitpunkt als Millisekunden. Text ohne Zone zählt als UTC: bei „GMT"-
+    Feldern ist er das, bei „Local"-Feldern stehen darin die Ziffern der
+    Ortszeit — die Differenz beider ist dann der Zeitzonen-Versatz. */
+function tsMs(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  if (/^\d{9,}$/.test(String(v))) return +v;
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+}
+
+/** Spalte einer Garmin-Messreihe. Die Zeilen kommen als [Zeit, Wert, …];
+    welche Spalte was ist, steht in einer eigenen Beschreibungsliste. */
+function column(desc, idxKey, nameKey, re, not, dflt) {
+  const d = (Array.isArray(desc) ? desc : []).find((x) => x && re.test(String(x[nameKey] || '')) && !(not && not.test(String(x[nameKey] || ''))));
+  return d && fin(+d[idxKey]) ? +d[idxKey] : dflt;
+}
+
+/** Messpunkte [Zeit, Wert] → [Minute seit t0, Wert] im Fenster a…b. */
+function cut(pts, t0, a, b, lo, hi) {
+  const out = [];
+  for (const [tv, vv] of pts) {
+    const t = tsMs(tv), v = num(vv);
+    if (t == null || !fin(v) || v <= lo || v > hi || t < a || t > b) continue;
+    out.push([Math.round((t - t0) / 60000), Math.round(v * 10) / 10]);
+  }
+  return out.sort((x, y) => x[0] - y[0]);
+}
+const rowsOf = (arr, ti, vi) => (Array.isArray(arr) ? arr : []).filter(Array.isArray).map((r) => [r[ti], r[vi]]);
+
+/** Rohantworten einer Nacht → kompakter Datensatz.
+    raw: { sleep, hrv, hr: [Vortag, Tag], bb: [Berichte], spo2 }
+    fb: { t0, t1, off } aus den gespeicherten Tageswerten, falls Garmin das
+    Schlaffenster in keiner Antwort mitschickt. */
+function mapNight(raw, fb) {
+  raw = raw || {};
+  let s = raw.sleep || {};
+  // Falls Garmin wie in Garmin Connect einen Umschlag mit Phasenverlauf schickt
+  if (s.dailySleepDTO) s = Object.assign({}, s.dailySleepDTO, { sleepLevels: s.sleepLevels || s.dailySleepDTO.sleepLevels });
+  const hv = raw.hrv || {}, sp = raw.spo2 || {};
+
+  // Schlaffenster und Versatz Ortszeit−UTC aus der ersten Antwort, die beides hat
+  let t0 = null, t1 = null, off = null;
+  for (const o of [s, hv, sp]) {
+    const a = tsMs(o.sleepStartTimestampGMT), b = tsMs(o.sleepEndTimestampGMT);
+    if (a == null || b == null || b <= a) continue;
+    t0 = a; t1 = b;
+    const la = tsMs(o.sleepStartTimestampLocal);
+    if (la != null) off = Math.round((la - a) / 900000) * 15;
+    break;
+  }
+  if (t0 == null && fb && fb.t1 > fb.t0) { t0 = fb.t0; t1 = fb.t1; }
+  if (t0 == null) return null;
+  if (off == null) off = fb && fin(fb.off) ? fb.off : 0;
+  // Etwas Vorlauf und Nachlauf, damit die Kurven an den Rändern nicht ausfransen
+  const a = t0 - 15 * 60000, b = t1 + 15 * 60000;
+
+  let hr = [];
+  for (const h of [].concat(raw.hr || [])) {
+    if (!h) continue;
+    const dsc = h.heartRateValueDescriptors;
+    hr = hr.concat(cut(rowsOf(h.heartRateValues, column(dsc, 'index', 'key', /time/i, null, 0), column(dsc, 'index', 'key', /heart|rate|value/i, /time/i, 1)), t0, a, b, 20, 240));
+  }
+  // Beide Kalendertage überlappen um Mitternacht nicht, doppelt ist trotzdem möglich
+  hr = hr.sort((x, y) => x[0] - y[0]).filter((p, i, arr) => !i || p[0] !== arr[i - 1][0]);
+
+  const hrv = cut((Array.isArray(hv.hrvReadings) ? hv.hrvReadings : []).map((r) => [r && r.readingTimeGMT, r && r.hrvValue]), t0, a, b, 0, 400);
+
+  let bb = [], bbImp = null;
+  for (const r of [].concat(raw.bb || [])) {
+    if (!r) continue;
+    const dsc = r.bodyBatteryValueDescriptorDTOList;
+    const ti = column(dsc, 'bodyBatteryValueDescriptorIndex', 'bodyBatteryValueDescriptorKey', /time/i, null, 0);
+    const vi = column(dsc, 'bodyBatteryValueDescriptorIndex', 'bodyBatteryValueDescriptorKey', /level/i, null, 1);
+    bb = bb.concat(cut(rowsOf(r.bodyBatteryValuesArray, ti, vi), t0, a, b, -1, 100));
+    for (const e of Array.isArray(r.bodyBatteryActivityEvent) ? r.bodyBatteryActivityEvent : []) {
+      const es = e && tsMs(e.eventStartTimeGmt);
+      // Das Schlaf-Ereignis dieser Nacht: beginnt höchstens drei Stunden vor dem Einschlafen
+      if (e && e.eventType === 'SLEEP' && es != null && es >= t0 - 3 * 3600e3 && es <= t1 && fin(num(e.bodyBatteryImpact))) bbImp = num(e.bodyBatteryImpact);
+    }
+  }
+  bb = bb.sort((x, y) => x[0] - y[0]).filter((p, i, arr) => !i || p[0] !== arr[i - 1][0]);
+
+  const sdsc = sp.spO2SingleValuesDescriptorList;
+  const spo2 = cut(rowsOf(sp.spO2SingleValues,
+    column(sdsc, 'spo2ValueDescriptorIndex', 'spo2ValueDescriptorKey', /time/i, null, 0),
+    column(sdsc, 'spo2ValueDescriptorIndex', 'spo2ValueDescriptorKey', /spo2|reading|level|value/i, /time|plottable|confidence|environment/i, 1)), t0, a, b, 50, 100);
+
+  // Phasenverlauf: in Garmins Beschreibung der Personal API nicht enthalten.
+  // Kommt er doch (wie in Garmin Connect), wird er gezeigt: 0 Tief, 1 Leicht, 2 REM, 3 Wach.
+  const lv = [];
+  for (const l of Array.isArray(s.sleepLevels) ? s.sleepLevels : []) {
+    const x0 = tsMs(l && l.startGMT), x1 = tsMs(l && l.endGMT), k = Math.round(num(l && l.activityLevel));
+    if (x0 == null || x1 == null || x1 <= x0 || !(k >= 0 && k <= 3)) continue;
+    lv.push([Math.round((x0 - t0) / 60000), Math.round((x1 - t0) / 60000), k]);
+  }
+  lv.sort((x, y) => x[0] - y[0]);
+
+  const naps = [];
+  for (const n of Array.isArray(s.dailyNapDTOS) ? s.dailyNapDTOS : []) {
+    const st = n && tsMs(n.napStartTimestampGMT), d = n && num(n.napTimeSec);
+    if (st == null || !(d > 0)) continue;
+    const o = fin(num(n.napStartTimeOffset)) ? num(n.napStartTimeOffset) : off;
+    naps.push({ at: Math.floor((((st + o * 60000) % DAY_MS) + DAY_MS) % DAY_MS / 60000), dur: d });
+  }
+
+  // Uhrzeit des Einschlafens auf der Achse von mapSleep (nach Mitternacht + 1440)
+  const md = Math.floor(((((t0 + off * 60000) % DAY_MS) + DAY_MS) % DAY_MS) / 60000);
+  return clean({
+    v: 1, t0, t1, off, s0: md < 12 * 60 ? md + 1440 : md, len: Math.round((t1 - t0) / 60000),
+    hr, hrv, bb, spo2, lv, naps, bbImp: bbImp == null ? undefined : bbImp,
+    unm: num(s.unmeasurableSleepSeconds) || undefined,
+    note: typeof s.userNote === 'string' && s.userNote.trim() ? s.userNote.trim().slice(0, 500) : undefined,
+  });
+}
+
+/** Lücken bis `maxGap` Punkte geradlinig überbrücken — HRV kommt nur alle
+    fünf Minuten, SpO2 setzt kurz aus. Längere Lücken bleiben sichtbar. */
+function fillGaps(a, maxGap) {
+  let last = -1;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] == null) continue;
+    if (last >= 0 && i - last > 1 && i - last - 1 <= maxGap) {
+      for (let j = last + 1; j < i; j++) a[j] = a[last] + ((a[i] - a[last]) * (j - last)) / (i - last);
+    }
+    last = i;
+  }
+  return a;
+}
+
+/** Eine Nacht auf ein gemeinsames Raster (alle `step` Minuten) bringen,
+    damit alle Kurven dieselbe Zeitachse haben und das Antippen in jeder
+    Kurve dieselbe Uhrzeit trifft. xs: Uhrzeit wie bei `bed` (über 1440 =
+    nach Mitternacht). */
+function nightGrid(n, step) {
+  step = step || 5;
+  const N = Math.max(2, Math.floor(n.len / step) + 1);
+  const xs = Array.from({ length: N }, (_, k) => n.s0 + k * step);
+  const bin = (pts) => {
+    const s = new Array(N).fill(0), c = new Array(N).fill(0);
+    for (const [m, v] of pts || []) {
+      const k = Math.round(m / step);
+      if (k < 0 || k >= N) continue;
+      s[k] += v; c[k]++;
+    }
+    return fillGaps(s.map((x, k) => (c[k] ? x / c[k] : null)), 3);
+  };
+  const lv = xs.map((_, k) => {
+    const m = k * step;
+    const seg = (n.lv || []).find((l) => m >= l[0] && m < l[1]);
+    return seg ? seg[2] : null;
+  });
+  return { xs, step, hr: bin(n.hr), hrv: bin(n.hrv), bb: bin(n.bb), spo2: bin(n.spo2), lv };
+}
 
 /* ── 4. Kennzahlen ──────────────────────────────────────────── */
 /* dir: +1 = mehr ist besser, −1 = weniger ist besser, 0 = keine Wertung.
@@ -299,9 +516,15 @@ const METRICS = {
   slpScore: { label: 'Schlafscore', group: 'Schlaf', dir: 1 },
   slp: { label: 'Schlafdauer', group: 'Schlaf', fmt: 'dur', dir: 1 },
   deep: { label: 'Tiefschlaf', group: 'Schlaf', fmt: 'dur', dir: 1 },
+  light: { label: 'Leichtschlaf', group: 'Schlaf', fmt: 'dur', dir: 0 },
   rem: { label: 'REM-Schlaf', group: 'Schlaf', fmt: 'dur', dir: 1 },
+  awake: { label: 'Wach in der Nacht', group: 'Schlaf', fmt: 'dur', dir: -1, hint: 'Zeit zwischen Einschlafen und Aufwachen, in der Du wach warst' },
   bed: { label: 'Einschlafzeit', group: 'Schlaf', fmt: 'clock', dir: 0 },
   wake: { label: 'Aufwachzeit', group: 'Schlaf', fmt: 'clock', dir: 0 },
+  mid: { label: 'Schlafmitte', group: 'Schlaf', fmt: 'clock', dir: 0, hint: 'Mitte zwischen Einschlafen und Aufwachen. Wandert sie, wandert Dein Rhythmus' },
+  debt: { label: 'Schlafsaldo 7 Nächte', group: 'Schlaf', fmt: 'min', dir: 1, noBand: true, hint: 'Geschlafen minus Garmins Schlafbedarf, zusammengezählt über die letzten sieben Nächte. Unter null heißt: Dir fehlt Schlaf' },
+  slpHr: { label: 'Puls im Schlaf', group: 'Schlaf', unit: 'bpm', dir: -1 },
+  slpStress: { label: 'Stress im Schlaf', group: 'Schlaf', dir: -1, hint: 'Mittel über die Nacht, 0–100' },
   hrv: { label: 'HRV', group: 'Erholung', unit: 'ms', dir: 1 },
   rhr: { label: 'Ruhepuls', group: 'Erholung', unit: 'bpm', dir: -1 },
   bbMax: { label: 'Body Battery', group: 'Erholung', dir: 1, hint: 'Höchstwert des Tages, meist am Morgen' },
@@ -328,6 +551,8 @@ const nfx = (dec) => (dec ? nf1 : nf0);
 /** Sekunden → „7:32 h", unter einer Stunde „45 min". */
 function fmtDur(s) {
   if (!fin(s)) return '–';
+  // Schlafsaldo kann negativ sein: „−1:20 h", nicht „-80 min"
+  if (Math.round(s / 60) < 0) return '−' + fmtDur(-s);
   const m = Math.round(s / 60);
   if (m < 60) return m + ' min';
   return `${Math.floor(m / 60)}:${pad(m % 60)} h`;
@@ -411,8 +636,27 @@ function value(db, idx, key, date) {
     case 'im':
       if (!d || (d.imMod == null && d.imVig == null)) return undefined;
       return (d.imMod || 0) + 2 * (d.imVig || 0);
+    // Aufwachen liegt auf dem Tag selbst, Einschlafen auf der Achse ab Mitternacht davor
+    case 'mid': return d && fin(d.bed) && fin(d.wake) ? (d.bed + d.wake + 1440) / 2 : undefined;
+    case 'debt': { const x = sleepDebt(db, date); return x ? x.sum : undefined; }
     default: return d ? d[key] : undefined;
   }
+}
+
+/** Schlafsaldo: geschlafen minus Garmins Schlafbedarf, in Minuten, über die
+    `n` Nächte bis `date`. Erst ab fünf von sieben bekannten Nächten — sonst
+    sähe eine Woche mit Lücken besser aus, als sie war. */
+function sleepDebt(db, date, n) {
+  n = n || 7;
+  let sumv = 0, k = 0;
+  const nights = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const dd = addDays(date, -i), d = (db.days || {})[dd];
+    const v = d && fin(d.slp) && fin(d.need) ? d.slp / 60 - d.need : null;
+    nights.push({ date: dd, v });
+    if (v != null) { sumv += v; k++; }
+  }
+  return k >= Math.ceil(n * 5 / 7) ? { sum: sumv, n: k, nights } : null;
 }
 /** Gibt es für diesen Tag überhaupt Uhrdaten? Vor der ersten Uhr oder an
     Tagen ohne Tragen darf keine „0 Belastung" entstehen. */
@@ -754,6 +998,7 @@ return {
   DAY_MS, isoDate, parseDate, addDays, dayDiff, today, dateRange, weekday, weekStart, monthKey, chunks, localParts,
   fin, sum, mean, sd, quantile, median, pearson, linreg, rolling,
   clean, mapDaily, mapSleep, mapHrv, mapWeight, mapActivity, mergeDay, FIELDS, SPLITS,
+  SLEEP_PARTS, sleepPart, NEED_FACTORS, tsMs, mapNight, fillGaps, nightGrid, sleepDebt,
   METRICS, GROUPS, fmt, fmtDelta, fmtDur, fmtClock,
   actLoad, buildIndex, value, hasDay, series, rollingBand,
   baseline, judge, readiness, loadStatus, loadSeries,

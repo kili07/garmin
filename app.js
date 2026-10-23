@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.1.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -57,6 +57,7 @@ const blank = () => ({
     rhr: null,
     zones: null,        // Untergrenzen der Zonen 1–5
     fetched: null,      // Tag des letzten Abrufs
+    sleep: null,        // Schlaf-Bezugswerte der neuesten Nacht: {date, opt, next, win} (Core.mapSleep → ref)
   },
   sync: {
     last: null,         // ISO-Zeit des letzten erfolgreichen Abgleichs
@@ -66,6 +67,10 @@ const blank = () => ({
     empty: 0,           // leere Blöcke in Folge beim Rückwärtsladen
     error: null,        // letzte Fehlermeldung, bis zum nächsten Erfolg
     warn: {},           // Quelle → Meldung, wenn nur ein Teil fehlschlug
+    gaps: {},           // Quelle → [[von, bis, Fehlversuche], …], wird nachgeholt (siehe SYNC_REV)
+    rev: 0,             // Fassung des Abgleichs, mit der der Verlauf zuletzt geprüft wurde
+    sleepV: 0,          // mit welcher Fassung von Core.mapSleep der Schlaf-Verlauf geladen ist
+    sleepFill: null,    // Nachladen des Schlafs: bis zu diesem Tag (rückwärts) erledigt
   },
   settings: {
     proxy: '',          // Adresse des Cloudflare Workers
@@ -92,6 +97,15 @@ function normalize(src) {
     d[k] = Object.assign({}, base[k], (src && typeof src[k] === 'object' && src[k]) || {});
   }
   d.sync.warn = (d.sync.warn && typeof d.sync.warn === 'object') ? d.sync.warn : {};
+  const gs = (d.sync.gaps && typeof d.sync.gaps === 'object') ? d.sync.gaps : {};
+  const isDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  d.sync.gaps = {};
+  for (const k of Object.keys(gs)) {
+    const list = Array.isArray(gs[k]) ? gs[k].filter((g) => Array.isArray(g) && isDay(g[0]) && isDay(g[1]) && g[0] <= g[1]) : [];
+    if (list.length) d.sync.gaps[k] = list.map((g) => [g[0], g[1], +g[2] || 0]);
+  }
+  const ps = d.profile.sleep;
+  if (!ps || typeof ps !== 'object' || typeof ps.date !== 'string') d.profile.sleep = null;
   d.days = (d.days && typeof d.days === 'object' && !Array.isArray(d.days)) ? d.days : {};
   for (const k of Object.keys(d.days)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !d.days[k] || typeof d.days[k] !== 'object') delete d.days[k];
@@ -204,7 +218,9 @@ function splitVal(key, v) {
   const m = M[key] || {};
   if (m.fmt === 'dur' || m.fmt === 'min') {
     const mins = Math.round(m.fmt === 'dur' ? v / 60 : v);
-    return mins < 60 ? [String(mins), 'min'] : [`${Math.floor(mins / 60)}:${pad2(mins % 60)}`, 'h'];
+    // Schlafsaldo kann negativ sein
+    const a = Math.abs(mins), sign = mins < 0 ? '−' : '';
+    return a < 60 ? [sign + a, 'min'] : [`${sign}${Math.floor(a / 60)}:${pad2(a % 60)}`, 'h'];
   }
   if (m.fmt === 'clock') return [Core.fmtClock(v), 'Uhr'];
   return [Core.fmt(key, v, true), m.unit || ''];
@@ -272,6 +288,30 @@ const isConfigured = () => !!(proxyBase() && keyGet());
 
 function apiErr(kind, msg, status) { const e = new Error(msg); e.kind = kind; e.status = status; return e; }
 
+/* Hinter dem Cloudflare Worker antwortet Garmin auf die meisten Anfragen
+   mit 526 (Cloudflare bekommt zu Garmins Servern keine gültige
+   TLS-Verbindung), direkt aufgerufen nie — gemessen am 23.10.2026: 25 von
+   30 Anfragen über den Worker, 0 von 6 direkt. Jede Anfrage ist ein eigener
+   Worker-Aufruf und gelingt unabhängig von der vorigen, also gleich noch
+   einmal. Ebenso bei 502–504 und den übrigen Cloudflare-Fehlern 520–530.
+   Bei einem Treffer auf fünf Versuche scheitern nach 25 Versuchen noch
+   etwa 1 % der Anfragen — die holt der nächste Abgleich nach. */
+const FLAKY_TRIES = 25;
+const flaky = (s) => s === 502 || s === 503 || s === 504 || (s >= 520 && s <= 530);
+
+/** Anfrage an den Proxy, bei den Fehlern oben bis zu FLAKY_TRIES Mal.
+    `before(n)` läuft vor dem n-ten Versuch (ab dem zweiten) und darf mit
+    einer Ausnahme abbrechen. */
+async function steadyFetch(url, init, timeout, before) {
+  for (let n = 1; ; n++) {
+    const res = await rawFetch(url, init, timeout);
+    if (!flaky(res.status) || n >= FLAKY_TRIES) return res;
+    try { if (res.body) res.body.cancel(); } catch (e) { /* egal */ }
+    await sleep(300);
+    if (before) before(n + 1);
+  }
+}
+
 async function rawFetch(url, init, timeout) {
   const ctl = new AbortController();
   const tm = setTimeout(() => ctl.abort(), timeout || 45000);
@@ -296,6 +336,7 @@ async function httpError(res, isToken) {
   if (s === 403) return apiErr('forbidden', 'Garmin verweigert den Zugriff auf diese Daten (403).', s);
   if (s === 404) return apiErr('missing', 'Garmin kennt diese Daten nicht (404).', s);
   if (s === 429) return apiErr('rate', 'Garmin bremst gerade wegen zu vieler Anfragen. In ein paar Minuten geht es weiter.', s);
+  if (flaky(s)) return apiErr('path', `Der Weg vom Proxy zu Garmin klemmt gerade (Fehler ${s}, auch nach ${FLAKY_TRIES} Versuchen). Später noch einmal abgleichen.`, s);
   if (s >= 500) return apiErr('server', `Garmin meldet einen Serverfehler (${s}). Später noch einmal versuchen.`, s);
   return apiErr('http', `Unerwartete Antwort von Garmin (${s}).`, s);
 }
@@ -310,7 +351,7 @@ async function ensureToken(force) {
   const tk = tokenGet();
   // Eine Stunde Puffer, wie Garmins eigener Client: kein Token läuft mitten im Abgleich ab
   if (!force && tk && tk.kf === kf && tk.exp - Date.now() > 3600e3) return tk.t;
-  const res = await rawFetch(proxyBase() + TOKEN_PATH, { method: 'POST', headers: { Authorization: 'ApiKey ' + key, Accept: '*/*' } });
+  const res = await steadyFetch(proxyBase() + TOKEN_PATH, { method: 'POST', headers: { Authorization: 'ApiKey ' + key, Accept: '*/*' } });
   if (!res.ok) throw await httpError(res, true);
   let t = (await res.text()).trim();
   // Laut Doku kommt der Token als nackter Text; falls doch einmal JSON, das Feld nehmen
@@ -336,17 +377,24 @@ async function pace() {
   lastReq = Date.now();
 }
 
-/** GET an die Personal API. Wiederholt bei abgelaufenem Token einmal und
-    wartet bei 429 (zu viele Anfragen) bis zu dreimal. */
+/** GET an die Personal API. Wiederholt bei abgelaufenem Token einmal,
+    wartet bei 429 (zu viele Anfragen) bis zu dreimal und versucht es bei
+    Cloudflare-Fehlern sofort noch einmal (steadyFetch). */
 async function api(path, opts) {
   opts = opts || {};
   let token = await ensureToken();
+  const label = opts.sync ? syncMsg : '';
+  const before = (n) => {
+    if (!opts.sync) return;
+    checkStop();
+    progress(`${label} · Versuch ${n}`);
+  };
   for (let attempt = 0; ; attempt++) {
     if (opts.sync) checkStop();
     await pace();
-    const res = await rawFetch(proxyBase() + path, {
+    const res = await steadyFetch(proxyBase() + path, {
       headers: { Authorization: 'Bearer ' + token, Accept: opts.accept || 'application/json' },
-    }, opts.binary ? 90000 : 45000);
+    }, opts.binary ? 90000 : 45000, before);
     if (res.status === 401 && attempt === 0) { token = await ensureToken(true); continue; }
     if (res.status === 429 && attempt < 3) {
       const ra = parseInt(res.headers.get('Retry-After'), 10);
@@ -393,6 +441,21 @@ const SOURCES = {
 };
 const ACT_PAGE = 99;                  // Höchstwert der Aktivitätssuche
 const BLOCK = 93;                     // Rückwärts in Vierteljahres-Blöcken laden
+/* Hochzählen, wenn Core.mapSleep mehr aus Garmins Schlafdaten liest: Der
+   nächste Abgleich holt dann den schon gespeicherten Schlaf-Verlauf einmal
+   neu (31 Tage je Anfrage, ein Jahr sind 12 Anfragen). */
+const SLEEP_V = 2;
+/* Hochzählen, wenn ältere Fassungen beim Abgleich Daten verloren haben
+   können: Der nächste Abgleich prüft dann den ganzen gespeicherten Verlauf
+   einmal nach. Fassung 2: bis 1.0.1 übersprang der Abgleich bei Fehler 526
+   ganze Zeiträume, ohne sie je nachzuholen. */
+const SYNC_REV = 2;
+/* Lücken: Zeiträume einer Quelle, deren Abruf fehlschlug (db.sync.gaps,
+   Quelle → [[von, bis, Fehlversuche], …]). Jeder Abgleich holt sie nach —
+   höchstens GAP_TRIES Mal, damit eine Anfrage, die Garmin grundsätzlich
+   ablehnt, nicht bei jedem Abgleich Zeit kostet. */
+const SRC_IDS = [...Object.keys(SOURCES), 'acts'];
+const GAP_TRIES = 5;
 
 let syncing = false;
 let stopRequested = false;
@@ -408,38 +471,120 @@ function progress(msg) {
 const maxDate = (a, b) => (a > b ? a : b);
 const fmtSpan = (a, b) => {
   const da = pdate(a), dbb = pdate(b);
-  return a.slice(0, 7) === b.slice(0, 7) ? dfMonthY.format(da) : `${dfMonth.format(da)}–${dfMonthY.format(dbb)}`;
+  if (a.slice(0, 7) === b.slice(0, 7)) return dfMonthY.format(da);
+  return `${(a.slice(0, 4) === b.slice(0, 4) ? dfMonth : dfMonthY).format(da)}–${dfMonthY.format(dbb)}`;
 };
 
-/** Fehler einer einzelnen Quelle: Netz, Schlüssel und Bremse brechen den
-    ganzen Abgleich ab — alles andere (z. B. eine Uhr ohne HRV) nur diese
-    Quelle, der Rest kommt trotzdem. */
-const fatal = (e) => e.stopped || ['net', 'key', 'nokey', 'noproxy', 'proxy', 'auth', 'rate', 'token'].includes(e.kind);
+/** Fehler einer einzelnen Quelle: Netz, Schlüssel, Bremse und ein Proxy-Weg,
+    der auch nach allen Versuchen klemmt, brechen den ganzen Abgleich ab —
+    der nächste macht dort weiter. Alles andere (z. B. eine Uhr ohne HRV)
+    trifft nur diese Quelle und diesen Zeitraum: Er wird als Lücke vermerkt. */
+const fatal = (e) => e.stopped || ['net', 'key', 'nokey', 'noproxy', 'proxy', 'auth', 'rate', 'token', 'path'].includes(e.kind);
 
-async function fetchBlock(a, b, actMap) {
-  let got = 0;
-  for (const [id, src] of Object.entries(SOURCES)) {
-    for (const [x, y] of Core.chunks(a, b, src.max)) {
-      progress(`${src.label} · ${fmtSpan(x, y)}`);
-      try {
+/** [a, b] aus den Lücken der Quelle `id` herausschneiden. */
+function cutGap(id, a, b) {
+  const out = [];
+  for (const g of db.sync.gaps[id] || []) {
+    if (g[1] < a || g[0] > b) { out.push(g); continue; }
+    if (g[0] < a) out.push([g[0], Core.addDays(a, -1), g[2]]);
+    if (g[1] > b) out.push([Core.addDays(b, 1), g[1], g[2]]);
+  }
+  if (out.length) db.sync.gaps[id] = out; else delete db.sync.gaps[id];
+}
+function addGap(id, a, b, tries) {
+  cutGap(id, a, b);
+  (db.sync.gaps[id] || (db.sync.gaps[id] = [])).push([a, b, tries]);
+}
+/** Lücken, die schon fehlgeschlagen sind (nicht bloß zum Nachprüfen vorgemerkt). */
+const failedGaps = (id) => (db.sync.gaps[id] || []).filter((g) => g[2] > 0);
+
+/** Eine Quelle für [a, b] holen, in den Stücken, die Garmin erlaubt. Was
+    gelingt, schließt eine Lücke; was fehlschlägt, wird eine — mit `tries`
+    Fehlversuchen davor. Liefert {got: Tageswerte/Aktivitäten, failed: Stücke}. */
+async function fetchSource(id, a, b, actMap, tries) {
+  const src = SOURCES[id];
+  let got = 0, failed = 0;
+  for (const [x, y] of src ? Core.chunks(a, b, src.max) : [[a, b]]) {
+    progress(`${src ? src.label : 'Aktivitäten'} · ${fmtSpan(x, y)}`);
+    try {
+      if (src) {
         const res = await src.get(x, y);
-        for (const rec of src.map(res)) if (rec && Object.keys(rec.v).length) { Core.mergeDay(db.days, rec, Core.FIELDS[id]); got++; }
-        delete db.sync.warn[id];
-      } catch (e) {
-        if (fatal(e)) throw e;
-        db.sync.warn[id] = e.message;
+        for (const rec of src.map(res)) if (rec && Object.keys(rec.v).length) { mergeRec(id, rec); got++; }
+      } else {
+        got += await fetchActs(x, y, actMap);
       }
+      cutGap(id, x, y);
+      if (!db.sync.gaps[id]) delete db.sync.warn[id];
+    } catch (e) {
+      if (fatal(e)) throw e;
+      addGap(id, x, y, (tries || 0) + 1);
+      db.sync.warn[id] = e.message;
+      failed++;
     }
   }
-  progress(`Aktivitäten · ${fmtSpan(a, b)}`);
-  try {
-    got += await fetchActs(a, b, actMap);
-    delete db.sync.warn.acts;
-  } catch (e) {
-    if (fatal(e)) throw e;
-    db.sync.warn.acts = e.message;
+  return { got, failed };
+}
+
+async function fetchBlock(a, b, actMap) {
+  let got = 0, failed = 0;
+  for (const id of SRC_IDS) {
+    const r = await fetchSource(id, a, b, actMap);
+    got += r.got; failed += r.failed;
   }
-  return got;
+  return { got, failed };
+}
+
+/** Lücken früherer Abgleiche nachholen. Was vor dem eingestellten Verlauf
+    liegt, fällt weg. */
+async function fillGaps(oldest, actMap) {
+  for (const id of SRC_IDS) {
+    cutGap(id, '0000-01-01', Core.addDays(oldest, -1));
+    for (const [a, b, tries] of (db.sync.gaps[id] || []).slice()) {
+      if (tries >= GAP_TRIES) continue;
+      // Stückweise speichern: Wer die App mittendrin schließt, verliert nichts
+      for (const [x, y] of Core.chunks(a, b, SOURCES[id] ? SOURCES[id].max : BLOCK)) {
+        await fetchSource(id, x, y, actMap, tries);
+        save();
+      }
+      reindex(); render();
+    }
+  }
+}
+
+function mergeRec(id, rec) {
+  Core.mergeDay(db.days, rec, Core.FIELDS[id]);
+  // Idealbereiche und Bedarf für heute Nacht gelten ab der neuesten Nacht —
+  // beim Rückwärtsladen darf eine ältere sie nicht überschreiben
+  if (rec.ref && (!db.profile.sleep || rec.date >= db.profile.sleep.date)) db.profile.sleep = Object.assign({ date: rec.date }, rec.ref);
+}
+
+/** Schlaf-Verlauf einmal neu holen, weil die App inzwischen mehr daraus
+    liest (SLEEP_V). Rückwärts in 31-Tage-Stücken; der Stand wird nach jedem
+    Stück gespeichert, ein abgebrochener Durchgang macht beim nächsten
+    Abgleich dort weiter. `until` ist der letzte Tag vor dem frisch
+    geladenen Block. */
+async function refillSleep(until) {
+  const src = SOURCES.sleep;
+  let end = db.sync.sleepFill ? Core.addDays(db.sync.sleepFill, -1) : until;
+  while (db.sync.from && end >= db.sync.from) {
+    const start = maxDate(db.sync.from, Core.addDays(end, -(src.max - 1)));
+    progress(`Schlaf-Details · ${fmtSpan(start, end)}`);
+    try {
+      const res = await src.get(start, end);
+      for (const rec of src.map(res)) if (rec && Object.keys(rec.v).length) mergeRec('sleep', rec);
+    } catch (e) {
+      if (fatal(e)) throw e;
+      // Nicht überspringen, sonst fehlen diesem Stück die Details für immer:
+      // Stand bleibt, der nächste Abgleich versucht es hier wieder
+      db.sync.warn.sleep = e.message;
+      return;
+    }
+    db.sync.sleepFill = start;
+    end = Core.addDays(start, -1);
+    save();
+  }
+  db.sync.sleepV = SLEEP_V;
+  db.sync.sleepFill = null;
 }
 
 async function fetchActs(a, b, actMap) {
@@ -503,6 +648,17 @@ async function sync(manual) {
     const recentFrom = db.sync.to
       ? maxDate(oldest, Core.addDays(db.sync.to, -3))
       : maxDate(oldest, Core.addDays(t, -27));
+    // Ohne gespeicherten Verlauf gibt es nichts nachzuladen
+    if (!db.sync.from) db.sync.sleepV = SLEEP_V;
+    if ((db.sync.rev || 0) < SYNC_REV) {
+      // Den ganzen gespeicherten Verlauf einmal nachprüfen. Der Schlaf kommt
+      // dabei ohnehin mit der neuen Umrechnung; und die Untergrenze kann von
+      // fehlgeschlagenen statt von leeren Blöcken stammen.
+      if (db.sync.from && db.sync.to) for (const id of SRC_IDS) addGap(id, db.sync.from, db.sync.to, 0);
+      db.sync.sleepV = SLEEP_V; db.sync.sleepFill = null;
+      db.sync.floor = null; db.sync.empty = 0;
+      db.sync.rev = SYNC_REV;
+    }
     await fetchBlock(recentFrom, t, actMap);
     db.sync.to = t;
     if (!db.sync.from || db.sync.from > recentFrom) db.sync.from = recentFrom;
@@ -511,13 +667,21 @@ async function sync(manual) {
     db.setup = true;
     save(); reindex(); render();
 
+    if ((db.sync.sleepV || 0) < SLEEP_V) {
+      await refillSleep(Core.addDays(recentFrom, -1));
+      save(); reindex(); render();
+    }
+
+    await fillGaps(oldest, actMap);
+
     const floor = () => maxDate(oldest, db.sync.floor || '0000-00-00');
     while (db.sync.from > floor()) {
       const b = Core.addDays(db.sync.from, -1);
       const a = maxDate(floor(), Core.addDays(b, -(BLOCK - 1)));
-      const got = await fetchBlock(a, b, actMap);
+      const r = await fetchBlock(a, b, actMap);
       db.sync.from = a;
-      db.sync.empty = got ? 0 : (db.sync.empty || 0) + 1;
+      // Ein Block mit Fehlern zählt nicht als leer — seine Lücken kommen später
+      db.sync.empty = r.got || r.failed ? 0 : (db.sync.empty || 0) + 1;
       // Ein halbes Jahr ohne jeden Wert: davor gab es noch keine Uhr
       if (db.sync.empty >= 2) db.sync.floor = a;
       save(); reindex(); render();
@@ -554,6 +718,7 @@ function renderTopSub() {
   if (syncing) { el.textContent = syncMsg || 'Abgleich …'; return; }
   if (db.sync.error) { el.textContent = 'Abgleich fehlgeschlagen · Details in den Einstellungen'; el.classList.add('err'); return; }
   el.textContent = db.sync.last ? 'Stand ' + agoLabel(db.sync.last) : (isConfigured() ? 'Noch nicht abgeglichen' : 'Noch nicht verbunden');
+  if (db.sync.last && SRC_IDS.some((k) => failedGaps(k).length)) el.textContent += ' · Lücken, siehe Einstellungen';
 }
 
 /* ── 5. Zwischenspeicher für Aktivitätskurven ───────────────── */
@@ -656,7 +821,9 @@ function nav(v) {
 /** Alles neu zeichnen. Bei diesen Datenmengen ist gezieltes Aktualisieren
     unnötige Komplexität — einmal neu rendern ist schnell genug und kann
     nicht aus dem Tritt geraten. */
+let renderedDay = null;                // für welchen Tag „heute" zuletzt gezeichnet wurde
 function render() {
+  renderedDay = Core.today();
   for (const k of readers.keys()) if (k[0] === 'v') readers.delete(k);
   renderTopSub();
   if (view === 'today') renderToday();
@@ -771,8 +938,8 @@ function renderToday() {
     const ph = [['deep', 'Tief'], ['light', 'Leicht'], ['rem', 'REM'], ['awake', 'Wach']].filter(([k]) => fin(d[k]) && d[k] > 0);
     const tot = ph.reduce((s, [k]) => s + d[k], 0) || 1;
     const need = fin(d.need) ? ` · Bedarf ${Core.fmtDur(d.need * 60)}` : '';
-    h += `<button class="card sleep-card" data-trend="${fin(d.slpScore) ? 'slpScore' : 'slp'}" style="margin-top:var(--sp-3)">
-      <div class="card-h">Schlaf<span class="muted">${fin(d.bed) && fin(d.wake) ? esc(Core.fmtClock(d.bed) + ' – ' + Core.fmtClock(d.wake)) : ''}</span></div>
+    h += `<button class="card sleep-card" data-night="${date}" style="margin-top:var(--sp-3)">
+      <div class="card-h">Schlaf<span class="muted">${fin(d.bed) && fin(d.wake) ? esc(Core.fmtClock(d.bed) + ' – ' + Core.fmtClock(d.wake)) : ''}</span>${ICON.chev}</div>
       <div class="sl-top">
         ${fin(d.slpScore) ? `<div class="sl-score">${nf0.format(d.slpScore)}<small>${esc(qualLabel(d.slpQ))}</small></div>` : ''}
         <div class="sl-facts"><span><b>${esc(Core.fmtDur(d.slp))}</b> geschlafen${esc(need)}</span>
@@ -807,6 +974,322 @@ function renderToday() {
 
 function qualLabel(q) {
   return { EXCELLENT: 'ausgezeichnet', GOOD: 'gut', FAIR: 'mittel', POOR: 'schwach' }[q] || '';
+}
+
+/* ── 7b. Eine Nacht im Detail ───────────────────────────────── */
+/* Antippen der Schlafkarte. Sofort da ist alles, was der Abgleich schon
+   mitbringt: Phasen gegen Garmins Idealbereich und Deinen Schnitt,
+   Garmins Teilbewertungen und Begründung, Schlafbedarf, Rhythmus. Die
+   Kurven der Nacht (Puls, HRV, Body Battery, SpO2) lädt das Sheet danach
+   einzeln von Garmin und legt sie in IndexedDB ab. */
+
+const Q_WORD = { E: 'ausgezeichnet', G: 'gut', F: 'mittel', P: 'schwach' };
+const Q_ST = { E: 'good', G: 'good', F: 'warn', P: 'bad' };
+const PHASE_LABEL = { deep: 'Tiefschlaf', light: 'Leichtschlaf', rem: 'REM-Schlaf', awake: 'Wach' };
+const LEVEL_LABEL = ['Tiefschlaf', 'Leichtschlaf', 'REM-Schlaf', 'Wach'];
+/* Garmins Begründung zum Score (sleepScoreFeedback) und der Einfluss vom
+   Vortag (sleepScoreInsight), übersetzt. Unbekannte Schlüssel bleiben weg. */
+const SLEEP_FB = {
+  POSITIVE_HIGHLY_RECOVERING: 'Sehr erholsam', POSITIVE_OPTIMAL_STRUCTURE: 'Phasen ideal verteilt',
+  POSITIVE_LONG_AND_RECOVERING: 'Lang und erholsam', POSITIVE_LONG_AND_DEEP: 'Lang und tief',
+  POSITIVE_LONG_AND_REFRESHING: 'Lang und erfrischend, viel REM', POSITIVE_LONG_AND_CONTINUOUS: 'Lang und durchgehend',
+  POSITIVE_LONG_AND_CALM: 'Lang und ruhig', POSITIVE_RECOVERING: 'Erholsam', POSITIVE_DEEP: 'Viel Tiefschlaf',
+  POSITIVE_REFRESHING: 'Erfrischend, viel REM', POSITIVE_CONTINUOUS: 'Durchgehend geschlafen', POSITIVE_CALM: 'Ruhig, wenig Stress',
+  POSITIVE_SHORT_BUT_RECOVERING: 'Kurz, aber erholsam', POSITIVE_SHORT_BUT_DEEP: 'Kurz, aber tief',
+  POSITIVE_SHORT_BUT_REFRESHING: 'Kurz, aber erfrischend', POSITIVE_SHORT_BUT_CONTINUOUS: 'Kurz, aber durchgehend',
+  POSITIVE_SHORT_BUT_CALM: 'Kurz, aber ruhig',
+  NEGATIVE_LONG_BUT_NOT_RESTORATIVE: 'Lang, aber wenig erholsam', NEGATIVE_LONG_BUT_LIGHT: 'Lang, aber wenig Tiefschlaf',
+  NEGATIVE_LONG_BUT_NOT_REFRESHING: 'Lang, aber wenig REM', NEGATIVE_LONG_BUT_DISCONTINUOUS: 'Lang, aber oft unterbrochen',
+  NEGATIVE_LONG_BUT_RESTLESS: 'Lang, aber unruhig', NEGATIVE_LONG_BUT_POOR_QUALITY: 'Lang, aber schlechte Qualität',
+  NEGATIVE_NOT_RESTORATIVE: 'Wenig erholsam', NEGATIVE_LIGHT: 'Wenig Tiefschlaf', NEGATIVE_NOT_REFRESHING: 'Wenig REM-Schlaf',
+  NEGATIVE_DISCONTINUOUS: 'Oft unterbrochen', NEGATIVE_RESTLESS: 'Unruhig', NEGATIVE_POOR_STRUCTURE: 'Phasen ungünstig verteilt',
+  NEGATIVE_SHORT_AND_NONRECOVERING: 'Kurz und wenig erholsam', NEGATIVE_SHORT_AND_POOR_STRUCTURE: 'Kurz, Phasen ungünstig verteilt',
+  NEGATIVE_SHORT_AND_POOR_QUALITY: 'Kurz und schlechte Qualität', NEGATIVE_LONG_BUT_NOT_ENOUGH_REM: 'Lang, aber zu wenig REM',
+  NEGATIVE_LONG_BUT_TOO_MUCH_REM: 'Lang, aber sehr viel REM', NEGATIVE_NOT_ENOUGH_REM: 'Zu wenig REM-Schlaf',
+  NEGATIVE_TOO_MUCH_REM: 'Sehr viel REM-Schlaf',
+};
+const SLEEP_INS = {
+  POSITIVE_ACCLIMATIZATION_IN_PROGRESS: 'Die Höhenanpassung läuft gut', POSITIVE_STRESSFUL_DAY: 'Trotz stressigem Tag gut geschlafen',
+  POSITIVE_RESTFUL_DAY: 'Ruhiger Tag davor', POSITIVE_RESTFUL_EVENING: 'Ruhiger Abend davor', POSITIVE_EXERCISE: 'Das Training am Vortag hat gutgetan',
+  POSITIVE_DAILY_ACTIVITY: 'Viel Bewegung am Vortag', POSITIVE_LATE_BED_TIME: 'Trotz später Bettzeit gut geschlafen',
+  NEGATIVE_ACCLIMATIZATION_IN_PROGRESS: 'Der Körper passt sich noch an die Höhe an', NEGATIVE_VERY_STRENUOUS_EXERCISE: 'Sehr hartes Training am Vortag',
+  NEGATIVE_LATE_STRENUOUS_EXERCISE: 'Hartes Training spät am Abend', NEGATIVE_STRENUOUS_EXERCISE: 'Hartes Training am Vortag',
+  NEGATIVE_LATE_EXERCISE: 'Training spät am Abend', NEGATIVE_HIGHLY_STRESSFUL_DAY: 'Sehr stressiger Tag davor',
+  NEGATIVE_STRESSFUL_DAY: 'Stressiger Tag davor', NEGATIVE_INACTIVE_DAY: 'Wenig Bewegung am Vortag', NEGATIVE_LATE_BED_TIME: 'Spät ins Bett gegangen',
+};
+const NEED_LABEL = { t: 'Training', s: 'Schlaf der letzten Nächte', h: 'HRV', n: 'Nickerchen' };
+const BRTH_LABEL = { LOW: 'wenige', MEDIUM: 'einige', HIGH: 'viele' };
+
+/** Kompakte Minuten mit Vorzeichen für schmale Zellen: „−32′", „+1:05". */
+function signMin(v) {
+  const m = Math.round(v);
+  if (!m) return '±0′';
+  const a = Math.abs(m), sign = m > 0 ? '+' : '−';
+  return sign + (a < 60 ? a + '′' : `${Math.floor(a / 60)}:${pad2(a % 60)}`);
+}
+
+/** Mittel über die 30 Nächte vor `date` — ab sieben Nächten, sonst null. */
+function nightMean(date, fn) {
+  const vals = [];
+  for (let i = 1; i <= 30; i++) {
+    const d = db.days[Core.addDays(date, -i)];
+    const v = d ? fn(d) : null;
+    if (fin(v)) vals.push(v);
+  }
+  return vals.length >= 7 ? Core.mean(vals) : null;
+}
+
+/** Nachbar-Nacht mit Schlafdaten, für ‹ › im Sheet. */
+function nightStep(date, dir) {
+  const ks = Object.keys(db.days).filter((k) => fin(db.days[k].slp) && (dir < 0 ? k < date : k > date));
+  if (!ks.length) return null;
+  return ks.reduce((a, b) => ((dir < 0 ? a > b : a < b) ? a : b));
+}
+
+let nightDate = null;
+
+function openNight(date) {
+  const d = db.days[date];
+  if (!d || !fin(d.slp)) return;
+  nightDate = date;
+  const ref = db.profile.sleep || {};
+  const opt = ref.opt || {};
+  const prev = nightStep(date, -1), next = nightStep(date, 1);
+  const span = fin(d.bed) && fin(d.wake) ? `${Core.fmtClock(d.bed)} – ${Core.fmtClock(d.wake)}` : '';
+
+  let h = `<div class="daynav sheet-nav">
+    <button class="icon-btn" data-nstep="${esc(prev || '')}" aria-label="Nacht davor"${prev ? '' : ' disabled'}>${ICON.left}</button>
+    <strong>Nacht zum ${esc(dfDayY.format(pdate(date)))}${span ? `<span class="muted"> · ${esc(span)}</span>` : ''}</strong>
+    <button class="icon-btn" data-nstep="${esc(next || '')}" aria-label="Nacht danach"${next ? '' : ' disabled'}>${ICON.right}</button>
+  </div>`;
+
+  // Kopf: Score, Dauer gegen Bedarf, Garmins Begründung
+  const need = fin(d.need) ? d.need * 60 : null;
+  const fb = SLEEP_FB[d.slpFb], ins = SLEEP_INS[d.slpIns];
+  const needSt = need ? (d.slp >= need - 15 * 60 ? 'good' : d.slp >= need - 90 * 60 ? 'warn' : 'bad') : '';
+  h += `<div class="card sleep-card"><div class="sl-top">
+      ${fin(d.slpScore) ? `<div class="sl-score">${nf0.format(d.slpScore)}<small>${esc(qualLabel(d.slpQ))}</small></div>` : ''}
+      <div class="sl-facts"><span><b>${esc(Core.fmtDur(d.slp))}</b> geschlafen</span>
+        ${need ? `<span>Bedarf ${esc(Core.fmtDur(need))} · <b class="st-${needSt}">${esc(Core.fmtDelta('slp', d.slp - need))}</b></span>` : ''}
+        ${fin(d.awakeN) || fin(d.awake) ? `<span>${fin(d.awakeN) ? `${nf0.format(d.awakeN)}× aufgewacht` : 'wach'}${fin(d.awake) ? ` · <b>${esc(Core.fmtDur(d.awake))}</b> wach` : ''}</span>` : ''}</div>
+    </div>
+    ${fb || ins ? `<div class="sl-fb">${fb ? `<b>${esc(fb)}</b>` : ''}${ins ? `<span>${esc(ins)}</span>` : ''}</div>` : ''}
+  </div>`;
+
+  // Phasen: Dauer, Anteil am Schlaf, Garmins Idealbereich, Dein Schnitt
+  const SCALE = 70;                 // Balken reichen bis 70 % — Leichtschlaf liegt selten darüber
+  h += '<div class="sec-h">Phasen<span class="muted">Anteil am Schlaf ohne Wachzeit</span></div><div class="card ph-rows">';
+  for (const k of ['deep', 'light', 'rem']) {
+    if (!fin(d[k])) continue;
+    const pct = (d[k] / d.slp) * 100;
+    const q = Core.sleepPart(d.sq, k);
+    const o = opt[k];
+    const avg = nightMean(date, (x) => (fin(x[k]) && x.slp > 0 ? x[k] : null));
+    const avgPct = nightMean(date, (x) => (fin(x[k]) && x.slp > 0 ? (x[k] / x.slp) * 100 : null));
+    const w = (v) => Math.max(0, Math.min(100, (v / SCALE) * 100));
+    h += `<div class="ph-row">
+      <div class="ph-h"><i class="ph-${k}"></i><b>${PHASE_LABEL[k]}</b><span class="ph-v num">${esc(Core.fmtDur(d[k]))}<small>${nf0.format(pct)} %</small></span>${q ? `<span class="q st-${Q_ST[q]}">${Q_WORD[q]}</span>` : ''}</div>
+      <div class="ph-bar">${o ? `<span class="ph-opt" style="left:${w(o[0])}%;width:${w(o[1]) - w(o[0])}%"></span>` : ''}<i class="ph-${k}" style="width:${w(pct)}%"></i>${fin(avgPct) ? `<span class="ph-avg" style="left:${w(avgPct)}%"></span>` : ''}</div>
+      <div class="ph-sub">${avg != null ? `Dein Ø ${esc(Core.fmtDur(avg))} · ${nf0.format(avgPct)} %` : 'Dein Schnitt folgt nach einer Woche'}${o ? ` · Ideal ${nf0.format(o[0])}–${nf0.format(o[1])} %` : ''}</div>
+    </div>`;
+  }
+  if (fin(d.awake)) {
+    const q = Core.sleepPart(d.sq, 'awk');
+    const avg = nightMean(date, (x) => x.awake);
+    h += `<div class="ph-row">
+      <div class="ph-h"><i class="ph-awake"></i><b>Wach</b><span class="ph-v num">${esc(Core.fmtDur(d.awake))}${fin(d.awakeN) ? `<small>${nf0.format(d.awakeN)}×</small>` : ''}</span>${q ? `<span class="q st-${Q_ST[q]}">${Q_WORD[q]}</span>` : ''}</div>
+      <div class="ph-sub">${avg != null ? `Dein Ø ${esc(Core.fmtDur(avg))}` : ''}${q ? `${avg != null ? ' · ' : ''}Garmin bewertet, wie oft Du aufwachst` : ''}</div>
+    </div>`;
+  }
+  h += `<div class="legend" style="margin-top:var(--sp-2)">${Object.keys(opt).length ? '<span><i class="l-opt"></i>Garmins Idealbereich</span>' : ''}<span><i class="l-mark"></i>Dein Schnitt (30 Nächte)</span></div></div>`;
+
+  // Garmins übrige Teilbewertungen
+  const rest = [
+    ['dur', 'Dauer', Core.fmtDur(d.slp)],
+    ['str', 'Stress im Schlaf', fin(d.slpStress) ? 'Ø ' + nf0.format(d.slpStress) : ''],
+    ['restl', 'Unruhe', ''],
+  ].filter(([k]) => Core.sleepPart(d.sq, k));
+  if (rest.length) {
+    h += `<div class="sec-h">Garmins Teilbewertungen</div><div class="card qrows">${rest.map(([k, l, v]) => {
+      const q = Core.sleepPart(d.sq, k);
+      return `<div><span>${l}</span><b class="num">${esc(v)}</b><em class="st-${Q_ST[q]}">${Q_WORD[q]}</em></div>`;
+    }).join('')}</div>`;
+  }
+
+  // Körper in der Nacht, jeweils gegen Deinen Schnitt
+  const body = [];
+  const cmp = (key, v, dir, f) => {
+    const avg = nightMean(date, (x) => x[key]);
+    // Nur Abweichungen färben — „im Normalbereich" bleibt neutral
+    const j = avg == null || !dir ? null : Core.judge(v, Core.baseline(db, idx, key, date, 30, 7), dir);
+    const st = j && j !== 'ok' ? j : '';
+    return { st, sub: avg != null ? `Ø ${f(avg)}` : '' };
+  };
+  if (fin(d.slpHr)) { const c = cmp('slpHr', d.slpHr, -1, (v) => nf0.format(v)); body.push([`${nf0.format(d.slpHr)} bpm`, 'Puls', c.sub, c.st]); }
+  if (fin(d.hrv)) { const c = cmp('hrv', d.hrv, 1, (v) => nf0.format(v)); body.push([`${nf0.format(d.hrv)} ms`, 'HRV', c.sub, c.st]); }
+  if (fin(d.slpResp)) body.push([`${nf1.format(d.slpResp)} /min`, 'Atmung', fin(d.respLo) && fin(d.respHi) ? `${nf0.format(d.respLo)}–${nf0.format(d.respHi)}` : '', '']);
+  if (fin(d.slpSpo2)) body.push([`${nf0.format(d.slpSpo2)} %`, 'SpO2', fin(d.spo2Lo) ? `min. ${nf0.format(d.spo2Lo)}` : '', fin(d.spo2Lo) && d.spo2Lo < 88 ? 'warn' : '']);
+  if (fin(d.slpStress)) { const c = cmp('slpStress', d.slpStress, -1, (v) => nf0.format(v)); body.push([nf0.format(d.slpStress), 'Stress', c.sub, c.st]); }
+  if (d.brth) body.push([BRTH_LABEL[d.brth] || '', 'Atemaussetzer', 'laut Garmin', d.brth === 'HIGH' ? 'warn' : '']);
+  if (body.length) {
+    h += `<div class="sec-h">Körper in der Nacht</div><div class="card"><div class="facts">${body.map(([v, l, sub, st]) => `<div><b${st ? ` class="st-${st}"` : ''}>${esc(v)}</b><span>${esc(l)}${sub ? ` · ${esc(sub)}` : ''}</span></div>`).join('')}</div>
+      <p class="note" style="margin-top:0">Farbig, wenn ein Wert außerhalb Deines Normalbereichs der 30 Nächte davor liegt.</p></div>`;
+  }
+
+  // Kurven der Nacht — kommen nach
+  h += '<div class="sec-h">Verlauf der Nacht</div><div id="nightCurves"><div class="loading"><span class="spinner"></span><span>Messreihen werden geladen …</span></div></div>';
+
+  // Schlafbedarf und Saldo
+  if (need) {
+    const debt = Core.sleepDebt(db, date);
+    const base = fin(d.needBase) ? d.needBase * 60 : null;
+    const why = (d.needAdj || '').split('').map((c) => NEED_LABEL[c]).filter(Boolean);
+    h += `<div class="sec-h">Schlafbedarf</div><div class="card">
+      <div class="stat-row">
+        ${base ? `<div class="stat"><span class="stat-l">Grundbedarf</span><span class="stat-v">${esc(Core.fmtDur(base))}</span></div>` : ''}
+        <div class="stat"><span class="stat-l">diese Nacht</span><span class="stat-v">${esc(Core.fmtDur(need))}</span>${base && base !== need ? `<span class="stat-d muted">${esc(Core.fmtDelta('slp', need - base))}</span>` : ''}</div>
+        <div class="stat"><span class="stat-l">geschlafen</span><span class="stat-v st-${needSt}">${esc(Core.fmtDur(d.slp))}</span></div>
+      </div>
+      ${base && base !== need && why.length ? `<p class="note">Garmin hat den Bedarf angepasst wegen: ${esc(why.join(', '))}.</p>` : ''}
+      ${debt ? `<div class="debt">${debt.nights.map((n) => `<div class="${n.v == null ? 'na' : 'st-' + (n.v >= -15 ? 'good' : n.v >= -60 ? 'warn' : 'bad')}${n.date === date ? ' sel' : ''}"><span>${['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][Core.weekday(n.date)]}</span><b>${n.v == null ? '–' : esc(signMin(n.v))}</b></div>`).join('')}</div>
+        <p class="note">Saldo der sieben Nächte bis hier: <b class="st-${debt.sum >= -30 ? 'good' : debt.sum >= -180 ? 'warn' : 'bad'}">${esc(Core.fmt('debt', debt.sum))}</b>${debt.n < 7 ? ` (${debt.n} Nächte bekannt)` : ''}.</p>` : ''}
+      ${date === Core.today() && ref.date === date && ref.next ? `<p class="note"><b>Heute Nacht</b> brauchst Du laut Garmin etwa ${esc(Core.fmtDur(ref.next.need * 60))}${fin(ref.next.lo) && fin(ref.next.hi) ? `, ins Bett am besten zwischen ${esc(Core.fmtClock(ref.next.lo))} und ${esc(Core.fmtClock(ref.next.hi))}` : ''}.</p>` : ''}
+    </div>`;
+  }
+
+  // Rhythmus: Uhrzeiten gegen Deinen Schnitt, Gleichmäßigkeit der letzten zwei Wochen
+  if (fin(d.bed) && fin(d.wake)) {
+    const mid = Core.value(db, idx, 'mid', date);
+    const clockOf = (key, x) => (key === 'mid' ? (fin(x.bed) && fin(x.wake) ? (x.bed + x.wake + 1440) / 2 : null) : x[key]);
+    const st = (key) => {
+      const avg = nightMean(date, (x) => clockOf(key, x));
+      return avg != null ? `<span class="stat-d muted">Ø ${esc(Core.fmtClock(avg))}</span>` : '';
+    };
+    const beds = Core.series(db, idx, 'bed', Core.addDays(date, -13), date).filter(fin);
+    const spread = beds.length >= 7 ? Core.sd(beds) : null;
+    h += `<div class="sec-h">Rhythmus</div><div class="card">
+      <div class="stat-row">
+        <div class="stat"><span class="stat-l">eingeschlafen</span><span class="stat-v">${esc(Core.fmtClock(d.bed))}</span>${st('bed')}</div>
+        <div class="stat"><span class="stat-l">aufgewacht</span><span class="stat-v">${esc(Core.fmtClock(d.wake))}</span>${st('wake')}</div>
+        <div class="stat"><span class="stat-l">Schlafmitte</span><span class="stat-v">${esc(Core.fmtClock(mid))}</span>${st('mid')}</div>
+      </div>
+      ${spread != null ? `<p class="note">Einschlafzeit der letzten ${beds.length} Nächte: ± ${nf0.format(spread)} min um ${esc(Core.fmtClock(Core.mean(beds)))} — <b class="st-${spread <= 30 ? 'good' : spread <= 45 ? 'ok' : 'warn'}">${spread <= 30 ? 'sehr gleichmäßig' : spread <= 45 ? 'recht gleichmäßig' : spread <= 75 ? 'schwankend' : 'stark schwankend'}</b>.</p>` : ''}
+      ${ref.win ? `<p class="note">Garmins optimales Schlaffenster für Dich: ${esc(Core.fmtClock(ref.win.lo))} – ${esc(Core.fmtClock(ref.win.hi))}.</p>` : ''}
+    </div>`;
+  }
+
+  if (fin(d.nap)) h += `<div class="sec-h">Nickerchen</div><div class="card" id="nightNaps"><p class="note" style="margin:0">${esc(Core.fmtDur(d.nap))} am Tag</p></div>`;
+
+  h += `<div class="btn-row" style="margin-top:var(--sp-5)"><button class="btn" data-trend="${fin(d.slpScore) ? 'slpScore' : 'slp'}">Schlaf-Trends</button></div>`;
+
+  openSheet('Schlaf', h, null);
+  $('#sheetBody').onclick = (e) => {
+    const b = e.target.closest('[data-nstep]');
+    if (b && b.dataset.nstep) { openNight(b.dataset.nstep); return; }
+    // Der Sprung zu den Trends läuft über den Klick-Handler der Seite — das Sheet muss dafür zu
+    if (e.target.closest('[data-trend]')) closeSheet();
+  };
+
+  loadNight(date).then((n) => {
+    const box = $('#nightCurves');
+    if (!box || nightDate !== date || $('#sheet').classList.contains('hidden')) return;
+    box.innerHTML = nightCurvesHtml(date, n);
+    if (n && n.naps && n.naps.length && $('#nightNaps')) {
+      $('#nightNaps').innerHTML = n.naps.map((x) => `<div class="qrow-1"><span>ab ${esc(Core.fmtClock(x.at))}</span><b class="num">${esc(Core.fmtDur(x.dur))}</b></div>`).join('');
+    }
+  }).catch((e) => {
+    const box = $('#nightCurves');
+    if (box && nightDate === date) box.innerHTML = `<div class="hint warn">${ICON.warn}<div class="grow"><span>${esc(e.message)}</span></div></div>`;
+  });
+}
+
+/** Schlaffenster aus den gespeicherten Tageswerten, in der Zeitzone des
+    Handys — nur Ersatz, falls Garmin es in keiner Antwort mitschickt. */
+function nightFallback(date, d) {
+  if (!d || !fin(d.bed) || !fin(d.wake)) return null;
+  const p = pdate(Core.addDays(date, -1));
+  const at = (min) => { const x = new Date(p.getFullYear(), p.getMonth(), p.getDate()); x.setMinutes(min); return x; };
+  const s = at(d.bed);
+  return { t0: s.getTime(), t1: at(d.wake + 1440).getTime(), off: -s.getTimezoneOffset() };
+}
+
+/* Wie die Aktivitätskurven: einmal laden, danach aus IndexedDB. Die letzte
+   Nacht kann noch unvollständig sein, solange die Uhr nicht synchronisiert
+   hat — sie gilt deshalb nur zwei Stunden. */
+const NIGHT_V = 1;
+const nightCache = new Map();
+async function loadNight(date) {
+  const key = 'night:' + date;
+  const recent = date >= Core.addDays(Core.today(), -1);
+  let n = nightCache.get(key) || await idbGet(key);
+  if (n && n.v === NIGHT_V && (!recent || Date.now() - n.at < 2 * 3600e3)) { nightCache.set(key, n); return n; }
+  if (!isConfigured()) {
+    if (n) return n;
+    throw new Error('Ohne Verbindung zu Garmin lassen sich die Kurven der Nacht nicht laden.');
+  }
+  const d = db.days[date] || {};
+  const prev = Core.addDays(date, -1);
+  let broken = false;
+  // Jede Quelle für sich: Eine Uhr ohne SpO2 soll die anderen Kurven nicht verhindern
+  const get = async (path) => {
+    try { return await api(path); } catch (e) {
+      if (fatal(e)) throw e;
+      if (e.kind !== 'missing' && e.kind !== 'forbidden') broken = true;
+      return null;
+    }
+  };
+  const raw = {
+    sleep: await get(`/sleep-service/sleep/dailySleep?date=${date}`),
+    hrv: await get(`/hrv-service/hrv/${date}`),
+    // Puls kommt je Kalendertag; vor Mitternacht eingeschlafen heißt: auch der Vortag
+    hr: [!fin(d.bed) || d.bed < 1440 ? await get(`/wellness-service/wellness/dailyHeartRate?date=${prev}`) : null,
+      await get(`/wellness-service/wellness/dailyHeartRate?date=${date}`)],
+    bb: await get(`/wellness-service/wellness/bodyBattery/reports/daily?startDate=${prev}&endDate=${date}`),
+    spo2: await get(`/wellness-service/wellness/daily/spo2acclimation/${date}`),
+  };
+  n = Core.mapNight(raw, nightFallback(date, d));
+  if (!n) throw new Error('Für diese Nacht kennt Garmin kein Schlaffenster.');
+  n.at = Date.now();
+  nightCache.set(key, n);
+  // Ein Teil schlug fehl (nicht nur „gibt es nicht"): nicht dauerhaft merken, beim nächsten Öffnen neu
+  if (!broken) await idbPut(key, n);
+  return n;
+}
+
+/** Kurven der Nacht auf gemeinsamer Zeitachse. Jede Kurve meldet beim
+    Antippen Uhrzeit und Wert an dieser Stelle. */
+function nightCurvesHtml(date, n) {
+  if (!n) return '<p class="note">Garmin hat für diese Nacht keine Messreihen.</p>';
+  const g = Core.nightGrid(n, 5);
+  const xs = g.xs;
+  let h = '';
+  if (n.lv && n.lv.length) {
+    const segs = n.lv.map(([a, b, k]) => [n.s0 + a, n.s0 + b, k]);
+    const reader = (i) => `<span>${esc(Core.fmtClock(xs[i]))}</span><b>${g.lv[i] != null ? LEVEL_LABEL[g.lv[i]] : '–'}</b>`;
+    const first = `<span>eingeschlafen</span><b>${esc(Core.fmtClock(n.s0))}</b><span class="end">aufgewacht ${esc(Core.fmtClock(n.s0 + n.len))}</span>`;
+    h += `<div class="card"><div class="card-h">Phasen</div>${chartBox(Charts.hypno(xs, segs, { fmtX: Core.fmtClock }), reader, first, 's')}</div>`;
+  } else {
+    h += '<p class="note" style="margin:0 2px var(--sp-2)">Den Verlauf der Phasen über die Nacht gibt Garmins Personal API nicht heraus, nur die Summen oben.</p>';
+  }
+  const curve = (key, label, unit, cls, first) => {
+    const ys = g[key];
+    if (ys.filter(fin).length < 3) return '';
+    const fy = (v) => nf0.format(v);
+    const reader = (i) => `<span>${esc(Core.fmtClock(xs[i]))}</span><b>${fin(ys[i]) ? esc(fy(ys[i]) + unit) : '–'}</b>`;
+    return `<div class="card"><div class="card-h">${esc(label)}</div>${chartBox(Charts.curve(xs, ys, { fmtY: fy, fmtX: Core.fmtClock, xUnit: 60, cls, fill: true }), reader, first, 's')}</div>`;
+  };
+  const stat = (pts) => { const v = (pts || []).map((p) => p[1]); return v.length ? { avg: Core.mean(v), lo: Math.min(...v), hi: Math.max(...v), at: pts[v.indexOf(Math.min(...v))][0] } : null; };
+  const hr = stat(n.hr), hrv = stat(n.hrv), ox = stat(n.spo2);
+  h += curve('hr', 'Puls', ' bpm', 'c-hr', hr ? `<span>Ø</span><b>${nf0.format(hr.avg)} bpm</b><span class="end">tiefster ${nf0.format(hr.lo)} um ${esc(Core.fmtClock(n.s0 + hr.at))}</span>` : '');
+  h += curve('hrv', 'HRV', ' ms', 'c-hrv', hrv ? `<span>Ø</span><b>${nf0.format(hrv.avg)} ms</b><span class="end">${nf0.format(hrv.lo)}–${nf0.format(hrv.hi)} ms</span>` : '');
+  const bb0 = n.bb && n.bb.length ? n.bb[0][1] : null, bb1 = n.bb && n.bb.length ? n.bb[n.bb.length - 1][1] : null;
+  const bbTxt = fin(n.bbImp) ? `<span>in der Nacht</span><b>${n.bbImp > 0 ? '+' : ''}${nf0.format(n.bbImp)}</b>` : '';
+  h += curve('bb', 'Body Battery', '', 'c-bb', (bbTxt || '') + (fin(bb0) ? `<span class="end">${nf0.format(bb0)} → ${nf0.format(bb1)}</span>` : ''));
+  h += curve('spo2', 'SpO2', ' %', 'c-spo2', ox ? `<span>Ø</span><b>${nf0.format(ox.avg)} %</b><span class="end">tiefster ${nf0.format(ox.lo)} %</span>` : '');
+  if (!['hr', 'hrv', 'bb', 'spo2'].some((k) => g[k].filter(fin).length >= 3)) h += '<p class="note">Für diese Nacht hat Garmin keine Messreihen.</p>';
+  if (n.unm) h += `<p class="note">${esc(Core.fmtDur(n.unm))} ließen sich keiner Phase zuordnen.</p>`;
+  if (n.note) h += `<div class="hint">${ICON.info}<div class="grow"><strong>Deine Notiz</strong><span>${esc(n.note)}</span></div></div>`;
+  return h;
 }
 
 /** Kachel einer Kennzahl. Intensitätsminuten zählen als Woche gegen das
@@ -921,6 +1404,8 @@ function availableMetrics() {
     if (k === 'load' || k === 'trainMin') { if (db.acts.length) out.add(k); continue; }
     if (k === 'vo2') { if (Object.keys(idx.vo2).length > 1) out.add(k); continue; }
     if (k === 'im') { if (days.some((d) => d.imMod != null)) out.add(k); continue; }
+    if (k === 'mid') { if (days.some((d) => fin(d.bed) && fin(d.wake))) out.add(k); continue; }
+    if (k === 'debt') { if (days.filter((d) => fin(d.need) && fin(d.slp)).length >= 5) out.add(k); continue; }
     if (days.some((d) => fin(d[k]))) out.add(k);
   }
   return out;
@@ -941,7 +1426,8 @@ function renderTrends() {
   const full = Core.series(db, idx, trendKey, Core.addDays(from, -pre), t);
   const avgWin = m.sparse ? 28 : 7;
   const avg = Core.rolling(full, avgWin, m.sparse ? 1 : 4).slice(pre);
-  const band = m.sparse ? null : Core.rollingBand(full, 30, 10);
+  // Beim Schlafsaldo ist jeder Tag schon eine Wochensumme — ein Band um die eigene Summe sagt nichts
+  const band = m.sparse || m.noBand ? null : Core.rollingBand(full, 30, 10);
   const lo = band ? band.lo.slice(pre) : null, hi = band ? band.hi.slice(pre) : null;
   const isSum = m.agg === 'sum';
 
@@ -957,7 +1443,8 @@ function renderTrends() {
   const unit = m.fmt === 'dur' ? 3600 : (m.fmt === 'min' || m.fmt === 'clock') ? 60 : 1;
 
   const ps = Core.periodStats(db, idx, trendKey, from, t);
-  const goal = trendKey === 'steps' ? (db.days[t] || db.days[Core.addDays(t, -1)] || {}).stepGoal : null;
+  // Schlafsaldo: die Nulllinie heißt „Bedarf gedeckt"
+  const goal = trendKey === 'steps' ? (db.days[t] || db.days[Core.addDays(t, -1)] || {}).stepGoal : trendKey === 'debt' ? 0 : null;
   const reader = (i) => {
     const v = vals[i];
     return `<span>${esc(dayLabel(dates[i]))}</span><b>${esc(Core.fmt(trendKey, v))}</b>`
@@ -981,9 +1468,11 @@ function renderTrends() {
   }
   const svg = Charts.trend({ dates, vals, avg, lo, hi, goal, unit, bars: isSum && dates.length <= 120, zero: isSum, fmtY: (v) => Core.fmt(trendKey, v, true) });
   h += `<div style="margin-top:var(--sp-3)">${chartBox(svg, reader, last >= 0 && fin(vals[last]) ? reader(last) : '')}</div>`;
-  h += `<div class="legend"><span><i class="l-pt"></i>Tag</span><span><i class="l-avg"></i>${m.sparse ? 'Mittel 4 Wochen' : 'Mittel 7 Tage'}</span>${band ? '<span><i class="l-band"></i>Dein Normalbereich</span>' : ''}${goal ? '<span><i class="l-goal"></i>Ziel</span>' : ''}</div>`;
+  h += `<div class="legend"><span><i class="l-pt"></i>Tag</span><span><i class="l-avg"></i>${m.sparse ? 'Mittel 4 Wochen' : 'Mittel 7 Tage'}</span>${band ? '<span><i class="l-band"></i>Dein Normalbereich</span>' : ''}${goal != null ? `<span><i class="l-goal"></i>${trendKey === 'debt' ? 'Bedarf gedeckt' : 'Ziel'}</span>` : ''}</div>`;
   if (m.hint || band) h += `<p class="note">${m.hint ? esc(m.hint) + '. ' : ''}${band ? 'Der Normalbereich ist Dein Mittel ± eine Standardabweichung über die 30 Tage davor — etwa zwei von drei Tagen liegen darin.' : ''}</p>`;
   h += '</div>';
+
+  if (m.group === 'Schlaf') h += phaseBars(from, t);
 
   // Wochen oder Monate im Vergleich
   const per = (trendRange && trendRange <= 91) ? 'week' : 'month';
@@ -1028,6 +1517,41 @@ function renderTrends() {
   // Der gewählte Chip kann weit rechts liegen (z. B. HRV hinter den Schlaf-Chips)
   const chips = $('.chips', el), on = $('.chip.on', el);
   if (chips && on) chips.scrollLeft = on.offsetLeft - chips.clientWidth / 2 + on.offsetWidth / 2;
+}
+
+/** Schlafphasen als gestapelte Balken: bei vier Wochen jede Nacht, darüber
+    das Mittel je Woche oder Monat. Zeigt, ob mehr Schlaf auch mehr Tief-
+    und REM-Schlaf heißt — oder nur mehr Leichtschlaf. */
+function phaseBars(from, t) {
+  const KEYS = ['deep', 'light', 'rem', 'awake'];
+  const span = Core.dayDiff(from, t);
+  const per = span < 35 ? 'night' : span <= 100 ? 'week' : 'month';
+  let rows;
+  if (per === 'night') {
+    rows = Core.dateRange(from, t).map((d) => {
+      const x = db.days[d] || {};
+      return { key: d, n: KEYS.some((k) => fin(x[k])) ? 1 : 0, vals: KEYS.map((k) => (fin(x[k]) ? x[k] : 0)) };
+    });
+  } else {
+    const aggFrom = per === 'week' ? Core.weekStart(from) : from.slice(0, 8) + '01';
+    const parts = KEYS.map((k) => Core.aggregate(db, idx, k, aggFrom, t, per));
+    rows = parts[0].map((g, i) => ({ key: g.key, n: g.n, vals: parts.map((p) => p[i].v || 0) }));
+  }
+  rows = rows.filter((r) => r.n);
+  if (rows.length < 2) return '';
+  const label = (k) => (per === 'month' ? dfMonth.format(pdate(k + '-15')).replace('.', '') : `${+k.slice(8)}.${+k.slice(5, 7)}.`);
+  const items = rows.map((r) => ({
+    label: label(r.key), v: r.vals.reduce((a, b) => a + b, 0),
+    parts: r.vals.map((v, i) => ({ v, cls: 'ph-' + KEYS[i] })),
+  }));
+  const reader = (i) => {
+    const r = rows[i];
+    const head = per === 'night' ? dayLabel(r.key) : per === 'week' ? `KW ${isoWeek(r.key)}` : dfMonthY.format(pdate(r.key + '-15'));
+    return `<span>${esc(head)}</span>` + r.vals.map((v, j) => (v > 0 ? `<span class="rd-ph"><i class="ph-${KEYS[j]}"></i>${esc(Core.fmtDur(v))}</span>` : '')).join('');
+  };
+  return `<div class="sec-h">Phasen ${per === 'night' ? 'je Nacht' : per === 'week' ? 'je Woche' : 'je Monat'}<span class="muted">${per === 'night' ? '' : 'Mittel pro Nacht'}</span></div>
+    <div class="card">${chartBox(Charts.bars(items, { fmtY: (v) => splitVal('slp', v)[0], unit: 3600, h: 160, nTicks: 4 }), reader, reader(rows.length - 1))}
+    <div class="legend">${KEYS.map((k) => `<span><i class="ph-${k}"></i>${PHASE_LABEL[k]}</span>`).join('')}</div></div>`;
 }
 
 /* ── 9. Training ────────────────────────────────────────────── */
@@ -1357,8 +1881,28 @@ function openSettings() {
   const span = nDays ? `${dfDate.format(pdate(firstDate()))} bis ${dfDate.format(pdate(Object.keys(db.days).reduce((a, b) => (a > b ? a : b))))}` : '';
   let size = 0;
   try { size = (localStorage.getItem(KEY) || '').length; } catch (e) { /* egal */ }
-  const warns = Object.entries(db.sync.warn || {});
   const srcName = { daily: 'Tageswerte', sleep: 'Schlaf', hrv: 'HRV', weight: 'Gewicht', acts: 'Aktivitäten' };
+  const gapSpan = (a, b) => (a === b ? dfDate.format(pdate(a))
+    : a.slice(0, 7) === b.slice(0, 7) ? `${+a.slice(8)}.–${dfDate.format(pdate(b))}` : fmtSpan(a, b));
+  // Je Quelle: was fehlschlug und ob es noch nachgeholt wird
+  const gapRows = SRC_IDS.map((k) => {
+    const fg = failedGaps(k).sort((x, y) => (x[0] < y[0] ? -1 : 1)), m = db.sync.warn[k];
+    if (!fg.length && !m) return '';
+    // Aneinandergrenzende Stücke als ein Zeitraum, neueste zuerst
+    const joined = [];
+    for (const g of fg) {
+      const last = joined[joined.length - 1];
+      if (last && Core.addDays(last[1], 1) >= g[0]) last[1] = maxDate(last[1], g[1]); else joined.push([g[0], g[1]]);
+    }
+    joined.reverse();
+    const spans = joined.slice(0, 4).map((g) => gapSpan(g[0], g[1]));
+    if (joined.length > 4) spans.push(`${joined.length - 4} weitere`);
+    const note = !fg.length ? ''
+      : fg.some((g) => g[2] < GAP_TRIES) ? 'wird beim nächsten Abgleich nachgeholt' : 'mehrmals fehlgeschlagen — „Alles neu laden“ versucht es noch einmal';
+    const sub = [spans.length ? 'Fehlt: ' + spans.join(', ') : '', m, note].filter(Boolean).join(' · ');
+    return `<div class="row"><span class="grow"><span class="t st-warn">${esc(srcName[k] || k)} unvollständig</span><span class="sub">${esc(sub)}</span></span></div>`;
+  }).join('');
+  const pending = SRC_IDS.filter((k) => (db.sync.gaps[k] || []).some((g) => !g[2]));
 
   openSheet('Einstellungen', `
     <div class="sec-h">Verbindung</div>
@@ -1385,7 +1929,8 @@ function openSettings() {
         <span class="switch" role="switch" aria-checked="${db.settings.autoSync}"></span></button>
       <div class="row"><span class="grow"><span class="t">${nf0.format(nDays)} Tage · ${nf0.format(db.acts.length)} Aktivitäten</span>
         <span class="sub">${esc(span || 'noch nichts geladen')}${db.sync.last ? ' · abgeglichen ' + esc(agoLabel(db.sync.last)) : ''} · ${nf0.format(size / 1024)} KB</span></span></div>
-      ${warns.map(([k, m]) => `<div class="row"><span class="grow"><span class="t st-warn">${esc(srcName[k] || k)} fehlt</span><span class="sub">${esc(m)}</span></span></div>`).join('')}
+      ${pending.length ? `<div class="row"><span class="grow"><span class="t">Verlauf wird nachgeprüft</span><span class="sub">${esc(pending.map((k) => srcName[k]).join(', '))} · beim nächsten Abgleich</span></span></div>` : ''}
+      ${gapRows}
     </div>
     <div class="btn-row" style="margin-top:var(--sp-3)">
       <button class="btn" id="btnSyncNow">Jetzt abgleichen</button>
@@ -1438,6 +1983,7 @@ function openSettings() {
     'Der gesamte Verlauf wird noch einmal von Garmin geholt. Die vorhandenen Daten bleiben, bis sie ersetzt sind.',
     'Neu laden', () => {
       db.sync.to = null; db.sync.from = null; db.sync.floor = null; db.sync.empty = 0; db.profile.fetched = null;
+      db.sync.gaps = {}; db.sync.warn = {};      // der ganze Verlauf kommt ohnehin neu
       save(); closeSheet(); sync(true);
     }, openSettings);
   $('#btnExport').onclick = exportBackup;
@@ -1813,6 +2359,8 @@ function wire() {
     if (tr) { trendKey = tr.dataset.trend; nav('trends'); return; }
     const ac = e.target.closest('[data-act]');
     if (ac) { openActivity(ac.dataset.act); return; }
+    const ng = e.target.closest('[data-night]');
+    if (ng) { openNight(ng.dataset.night); return; }
     const dy = e.target.closest('[data-day]');
     if (dy) { dayView = dy.dataset.day === Core.today() ? null : dy.dataset.day; renderToday(); armBack(); return; }
     const ds = e.target.closest('[data-daystep]');
@@ -1856,7 +2404,8 @@ function wire() {
   // Zurück in die App nach längerer Pause: abgleichen und „Heute" auf den neuen Tag ziehen
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    renderTopSub();
+    // Über Mitternacht offen geblieben: neu zeichnen, auch wenn kein Abgleich fällig ist
+    if (renderedDay !== Core.today()) render(); else renderTopSub();
     maybeAutoSync();
   });
   window.addEventListener('online', maybeAutoSync);

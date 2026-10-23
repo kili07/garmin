@@ -15,15 +15,31 @@ eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das 
   Normalbereich der letzten Wochen, dazu eine Einschätzung in einem Satz. Garmins „Training Readiness“ gibt die
   API nicht her; die App zeigt stattdessen offen, woraus sich so ein Wert zusammensetzt.
 - **Schlaf der letzten Nacht:** Score, Dauer gegen Schlafbedarf, Einschlaf- und Aufwachzeit, Phasen, Puls, Atmung.
+  Antippen öffnet **die Nacht im Detail:**
+  - jede Phase (Tief, Leicht, REM, Wach) mit Dauer, Anteil, Garmins Bewertung, Garmins Idealbereich und Deinem
+    Schnitt der 30 Nächte davor,
+  - Garmins Begründung zum Score („Lang, aber zu wenig REM“) und was vom Vortag hineinspielte, dazu Garmins
+    Teilbewertungen für Dauer, Stress und Unruhe,
+  - Puls, HRV, Atmung (mit Spanne), SpO2 (mit tiefstem Wert), Stress und Atemaussetzer, jeweils gegen Deinen Schnitt,
+  - die Kurven der Nacht: Puls, HRV, Body Battery und SpO2 auf einer Zeitachse; antippen zeigt die Uhrzeit,
+  - Schlafbedarf: Grundbedarf, Bedarf dieser Nacht und wodurch Garmin ihn angepasst hat, Saldo der letzten sieben
+    Nächte, am Morgen auch der Bedarf für die kommende Nacht mit empfohlener Bettzeit,
+  - Rhythmus: Einschlafen, Aufwachen und Schlafmitte gegen Deinen Schnitt, wie gleichmäßig Du die letzten zwei
+    Wochen eingeschlafen bist, Garmins optimales Schlaffenster, Nickerchen.
+
+  Mit ‹ › geht es Nacht für Nacht zurück. Den Verlauf der Phasen über die Nacht (das Balkendiagramm aus Garmin
+  Connect) gibt die Personal API laut Beschreibung nicht her. Schickt Garmin ihn doch mit, zeigt die App ihn.
 - **Kacheln** für HRV, Ruhepuls, Body Battery, Stress, Schritte, Intensitätsminuten (Woche), Belastung (7 Tage),
   Gewicht, Atmung und SpO2. Jede mit Abstand zu Deinem Mittel und dem Verlauf der letzten zwei Wochen; antippen
   öffnet den Trend.
 - **Woche auf einen Blick:** sieben Tage × sechs Werte als Tabelle, jede Zelle in der Farbe ihrer Abweichung.
 - Mit ‹ › durch frühere Tage blättern.
 
-**Trends** für 22 Kennzahlen, über 4 Wochen, 3 Monate, 1 Jahr oder alles: Tageswerte, 7-Tage-Mittel und Dein
+**Trends** für 28 Kennzahlen, darunter Leichtschlaf, Wachzeit, Schlafmitte, Schlafsaldo (7 Nächte), Puls und Stress
+im Schlaf, über 4 Wochen, 3 Monate, 1 Jahr oder alles: Tageswerte, 7-Tage-Mittel und Dein
 Normalbereich als Band; Vergleich mit dem Zeitraum davor und mit dem Vorjahr; Trend pro Monat; Wochen- oder
-Monatsbalken; Mittel je Wochentag. Diagramme antippen zeigt den Wert an der Stelle.
+Monatsbalken; Mittel je Wochentag. Bei Schlaf-Kennzahlen zusätzlich die Phasen als gestapelte Balken: je Nacht
+(4 Wochen), je Woche oder je Monat. Diagramme antippen zeigt den Wert an der Stelle.
 
 **Training**
 - Einheiten, Zeit und Distanz der Woche, des Monats oder des Jahres gegen den gleichen Abschnitt davor.

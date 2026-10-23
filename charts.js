@@ -201,7 +201,7 @@ function bars(items, o) {
   const step = (x1 - x0) / items.length, bw = Math.min(28, step * 0.66);
   const fmtY = o.fmtY || String;
   let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${items.length}" data-x0="${x0}" data-x1="${x1}">`;
-  if (!o.noAxis) s += yAxis(ticks(lo, ex[1], 3, o.unit), y, x0, x1, fmtY);
+  if (!o.noAxis) s += yAxis(ticks(lo, ex[1], o.nTicks || 3, o.unit), y, x0, x1, fmtY);
   if (o.goal != null) s += `<line class="goal" x1="${x0}" x2="${x1}" y1="${r1(y(o.goal))}" y2="${r1(y(o.goal))}"/>`;
   const every = labelEvery(items.map((it) => it.label), step);
   // Werte über den Balken nur, wenn sie nebeneinander Platz haben
@@ -342,6 +342,34 @@ function curve(xs, ys, o) {
   return s + '</svg>';
 }
 
+/* ── Schlafphasen über die Nacht ────────────────────────────── */
+/** Phasen als Blöcke in vier Bahnen, Wach oben, Tief unten — wie in Garmin
+    Connect. segs: [[von, bis, Stufe]] in Uhrzeit-Minuten (Achse wie xs),
+    Stufe 0 Tief, 1 Leicht, 2 REM, 3 Wach. xs ist das Raster der übrigen
+    Nachtkurven: gleiche Achse, gleiches Antippen. */
+function hypno(xs, segs, o) {
+  o = o || {};
+  const h = o.h || 104, x0 = 34, x1 = W - 6, top = 4, bot = h - 18;
+  const n = xs.length;
+  if (n < 2 || !segs.length) return '';
+  const x = scale(xs[0], xs[n - 1], x0, x1);
+  const lane = (bot - top) / 4;
+  const row = { 3: 0, 2: 1, 1: 2, 0: 3 }, cls = ['ph-deep', 'ph-light', 'ph-rem', 'ph-awake'];
+  let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${n}" data-x0="${x0}" data-x1="${x1}">`;
+  ['Wach', 'REM', 'Leicht', 'Tief'].forEach((l, i) => {
+    s += `<line class="grid" x1="${x0}" x2="${x1}" y1="${r1(top + lane * (i + 1))}" y2="${r1(top + lane * (i + 1))}"/>`
+      + `<text class="ax" x="${x0 - 4}" y="${r1(top + lane * (i + 0.5) + 3)}" text-anchor="end">${l}</text>`;
+  });
+  for (const [a, b, k] of segs) {
+    const xa = Math.max(x0, x(a)), xb = Math.min(x1, x(b));
+    if (xb <= xa) continue;
+    s += `<rect class="${cls[k]}" x="${r1(xa)}" y="${r1(top + lane * row[k] + 1)}" width="${r1(Math.max(0.6, xb - xa))}" height="${r1(lane - 2)}" rx="1.5"/>`;
+  }
+  for (const v of ticks(xs[0], xs[n - 1], 4, 60)) s += `<text class="ax" x="${r1(x(v))}" y="${h - 4}" text-anchor="middle">${esc((o.fmtX || String)(v))}</text>`;
+  s += `<line class="cursor hidden" x1="0" x2="0" y1="${top}" y2="${bot}"/>`;
+  return s + '</svg>';
+}
+
 /* ── Mini-Balken für Wochentage ─────────────────────────────── */
 function weekdays(vals, o) {
   o = o || {};
@@ -366,7 +394,7 @@ function weekdays(vals, o) {
   return s + '</svg>';
 }
 
-return { spark, trend, bars, scatter, load, track, curve, weekdays, ticks, dateTicks, esc };
+return { spark, trend, bars, scatter, load, track, curve, hypno, weekdays, ticks, dateTicks, esc };
 })();
 
 if (typeof module === 'object' && module.exports) module.exports = Charts;
