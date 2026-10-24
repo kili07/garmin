@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.4.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -693,6 +693,9 @@ async function fetchActs(a, b, actMap) {
     for (const raw of list) {
       const m = Core.mapActivity(raw);
       if (!m) continue;
+      // VO2max aus der Originaldatei (fillVo2) übersteht den neuen Abruf
+      const old = actMap.get(m.id);
+      if (old && old.vo2f) { m.vo2f = 1; if (!fin(m.vo2) && fin(old.vo2)) m.vo2 = old.vo2; }
       actMap.set(m.id, m); seen.add(m.id); n++;
     }
     if (list.length < ACT_PAGE) break;
@@ -767,6 +770,7 @@ async function sync(manual) {
     // Gleich nach dem Aktuellen: Die Nacht von heute früh soll schon ausgewertet sein, wenn man sie öffnet
     await analyzeNights();
     render();
+    if (await fillVo2()) { save(); reindex(); render(); }
 
     if ((db.sync.sleepV || 0) < SLEEP_V) {
       await refillSleep(Core.addDays(recentFrom, -1));
@@ -2485,7 +2489,54 @@ async function loadStreams(a) {
     await idbPut(a.id, st);
   }
   streamCache.set(a.id, st);
+  if (takeVo2(a, st)) { save(); reindex(); render(); }
   return st;
+}
+
+/* VO2max aus der Originaldatei. Garmins Aktivitätsliste lässt vO2MaxValue
+   bei manchen Uhren leer, die Uhr schreibt die VO2max aber in die FIT-Datei.
+   Nur Läufe draußen: Dort schätzt Garmin die Lauf-VO2max; in der Datei einer
+   Radfahrt oder eines Laufbandlaufs stünde nur der alte Wert. Je Abgleich
+   höchstens VO2_FILES Dateien, die neuesten zuerst; jede Aktivität einmal
+   (vo2f), das letzte Jahr — so weit reicht das VO2max-Diagramm. */
+const VO2_FILES = 8;
+const vo2Run = (a) => Core.sportOf(a.type) === 'run' && !/treadmill|indoor|virtual/.test(a.type);
+
+/** VO2max aus gelesenen Kurven übernehmen. true, wenn sich etwas geändert hat. */
+function takeVo2(a, st) {
+  if (a.vo2f || fin(a.vo2) || !st || !('vo2' in st) || !vo2Run(a)) return false;
+  a.vo2f = 1;
+  if (fin(st.vo2)) a.vo2 = Math.round(st.vo2);
+  return true;
+}
+
+async function fillVo2() {
+  const from = Core.addDays(Core.today(), -364);
+  const todo = db.acts.filter((a) => !a.vo2f && !fin(a.vo2) && a.date >= from && vo2Run(a))
+    .sort((x, y) => (x.start < y.start ? 1 : -1)).slice(0, VO2_FILES);
+  let changed = false;
+  for (const a of todo) {
+    progress(`VO2max · ${dfDate.format(pdate(a.date))}`);
+    let st = await idbGet(a.id);
+    if (!st || !('vo2' in st)) {
+      try {
+        const buf = await api(`/download-service/files/activity/${a.id}`, { sync: true, binary: true, accept: 'application/zip, application/x-zip-compressed, application/octet-stream' });
+        st = await Fit.fromDownload(buf);
+      } catch (e) {
+        if (e.stopped) throw e;
+        // Netz, Schlüssel, klemmender Proxy: Die Tageswerte stehen schon, der nächste Abgleich macht weiter
+        if (fatal(e)) break;
+        // Keine FIT-Datei, Garmin kennt sie nicht oder gibt sie nicht her: nicht bei jedem Abgleich neu versuchen
+        if (!e.kind || ['missing', 'forbidden'].includes(e.kind)) { a.vo2f = 1; changed = true; }
+        continue;
+      }
+      if (!st) { a.vo2f = 1; changed = true; continue; }
+      await idbPut(a.id, st);
+      streamCache.set(a.id, st);
+    }
+    if (takeVo2(a, st)) changed = true;
+  }
+  return changed;
 }
 
 let trackBy = 'hr';

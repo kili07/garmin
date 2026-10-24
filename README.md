@@ -110,7 +110,8 @@ Stress.
 ## Was Garmins Personal API nicht liefert
 
 Training Readiness, Training Status und Erholungszeit gibt es dort nicht. VO2max und Training Effect kommen nur je
-Aktivität mit. Die App rechnet die Belastung (akut/chronisch) deshalb selbst aus den Aktivitäten.
+Aktivität mit, die VO2max bei manchen Uhren nicht einmal dort. Dann liest die App sie aus der Originaldatei (FIT) der
+Läufe draußen, beim Abgleich je höchstens acht, die neuesten zuerst. Die App rechnet die Belastung (akut/chronisch) deshalb selbst aus den Aktivitäten.
 
 ## Einrichten
 

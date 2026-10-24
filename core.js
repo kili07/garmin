@@ -636,10 +636,13 @@ function actLoad(a, rhr, maxHr) {
 }
 
 function buildIndex(db) {
-  const load = {}, trainMin = {}, late = {}, vo2 = {};
+  const load = {}, trainMin = {}, late = {}, vo2 = {}, vo2At = {};
   const prof = db.profile || {};
   for (const a of db.acts || []) {
     if (!a.date) continue;
+    // VO2max auch aus den Teilen einer Mehrsport-Einheit (nur sie tragen sie),
+    // bei mehreren am Tag die der zuletzt begonnenen Einheit
+    if (fin(a.vo2) && !(vo2At[a.date] > a.start)) { vo2[a.date] = a.vo2; vo2At[a.date] = a.start; }
     // Teile einer Mehrsport-Einheit stecken auch im Ganzen — nicht doppelt zählen
     if (a.parent) continue;
     const day = (db.days || {})[a.date] || {};
@@ -648,7 +651,6 @@ function buildIndex(db) {
     const h = +a.start.slice(11, 13);
     const endH = h + (a.dur || 0) / 3600;
     if (endH >= 19 && (a.dur || 0) >= 20 * 60) late[a.date] = 1;
-    if (fin(a.vo2)) vo2[a.date] = a.vo2;
   }
   return { load, trainMin, late, vo2 };
 }

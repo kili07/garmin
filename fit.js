@@ -5,7 +5,8 @@
    Garmin liefert die Originaldatei einer Aktivität als ZIP mit einer
    .fit darin. Beides wird hier ohne Bibliothek entpackt und gelesen — die
    offizielle FIT-Bibliothek wäre ein npm-Paket mit 1 MB Profil, gebraucht
-   werden aber nur vier Nachrichtentypen: Datei, Sitzung, Runde, Messpunkt.
+   werden aber nur fünf Nachrichtentypen: Datei, Sitzung, Runde, Messpunkt
+   und Garmins Leistungswerte (VO2max).
 
    Eigenständig und ohne DOM, damit tests/fit-test.js die Datei in Node gegen
    echte FIT-Dateien und gegen Garmins eigenen Decoder prüfen kann.
@@ -89,6 +90,11 @@ const MSG = {
     253: ['ts'], 0: ['lat', 0, 0, SEMI], 1: ['lon', 0, 0, SEMI], 2: ['alt', 5, 500], 3: ['hr'], 4: ['cad'],
     5: ['dist', 100], 6: ['spd', 1000], 7: ['pwr'], 13: ['temp'], 73: ['espd', 1000], 78: ['ealt', 5, 500],
   } },
+  // Nicht in Garmins öffentlichem Profil. Uhren schreiben hier am Ende der
+  // Aktivität die aktuelle VO2max hinein, in Einheiten von 3,5/65536 ml/kg/min
+  // (1 MET = 3,5 ml/kg/min, als 16.16-Festkomma). Garmins Testdatei
+  // HrmPluginTestActivity.fit hat dort 53,6.
+  140: { name: 'metrics', f: { 7: ['vo2', 65536 / 3.5] } },
 };
 
 function readVal(dv, p, kind, little) {
@@ -111,7 +117,7 @@ function readVal(dv, p, kind, little) {
 function parse(buf) {
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-  const res = { file: null, sessions: [], laps: [], records: [] };
+  const res = { file: null, sessions: [], laps: [], records: [], vo2: null };
   let off = 0;
   while (off + 12 <= u8.length) {
     const hsize = u8[off];
@@ -199,6 +205,7 @@ function parseRecords(u8, dv, p, end, res) {
     else if (spec.name === 'lap') res.laps.push(msg);
     else if (spec.name === 'session') res.sessions.push(msg);
     else if (spec.name === 'file' && !res.file) res.file = msg;
+    else if (spec.name === 'metrics' && msg.vo2 != null) res.vo2 = msg.vo2;
   }
 }
 
@@ -255,10 +262,21 @@ async function fromDownload(buf, inflate) {
     }
     fitBytes = f.data;
   }
-  return streams(parse(fitBytes), 400);
+  const fit = parse(fitBytes);
+  const st = streams(fit, 400);
+  // Immer gesetzt, auch als null: So erkennt die App Kurven, die schon mit
+  // dieser Fassung gelesen wurden
+  if (st) st.vo2 = vo2Of(fit);
+  return st;
 }
 
-return { unzip, parse, streams, fromDownload, FIT_EPOCH };
+/** VO2max aus der Datei, auf eine Nachkommastelle; Unplausibles fällt weg. */
+function vo2Of(fit) {
+  const v = fit && fit.vo2;
+  return v >= 15 && v <= 95 ? Math.round(v * 10) / 10 : null;
+}
+
+return { unzip, parse, streams, fromDownload, vo2Of, FIT_EPOCH };
 })();
 
 if (typeof module === 'object' && module.exports) module.exports = Fit;
