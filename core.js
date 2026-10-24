@@ -560,6 +560,8 @@ const METRICS = {
   im: { label: 'Intensitätsminuten', group: 'Alltag', unit: 'min', dir: 1, agg: 'sum', hint: 'intensive Minuten zählen doppelt' },
   kcalAct: { label: 'Aktive Kalorien', group: 'Alltag', unit: 'kcal', dir: 1 },
   floors: { label: 'Etagen', group: 'Alltag', dir: 1 },
+  // Von Hand eingetragen (Heute → Letzter Kaffee), nicht von Garmin; steht deshalb in keinem FIELDS
+  coffee: { label: 'Letzter Kaffee', group: 'Alltag', fmt: 'clock', dir: 0, minN: 3, hint: 'Von Dir eingetragen: wann Du an dem Tag zuletzt Kaffee getrunken hast' },
   load: { label: 'Trainingsbelastung', group: 'Training', dir: 0, agg: 'sum', zero: true },
   trainMin: { label: 'Trainingszeit', group: 'Training', fmt: 'min', dir: 0, agg: 'sum', zero: true },
   vo2: { label: 'VO2max', group: 'Training', dir: 1, sparse: true },

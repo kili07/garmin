@@ -13,6 +13,8 @@
       Nächten, solche mit viel von solchen mit wenig Tief- oder REM-Schlaf?
    3. Phasen über die Schlafdauer, Idealbereich, Verteilung der Unruhe,
       Häufung unruhiger Nächte, Pulsspitzen nach Stunde der Nacht
+   4. Kaffee: später gegen früher letzter Kaffee, mit gegen ohne, jeweils
+      in der Nacht danach
 
    Baut auf Core auf (Datum, Statistik, value). Eigene Datei, weil der Teil
    eigenständig ist und über 300 Zeilen hat (Bauanleitung, Abschnitt 2).
@@ -185,6 +187,7 @@ const FACTORS = [
   { id: 'steps', k: 'steps', lag: 1, g: 'before', label: 'Schritte', more: 'Mehr Schritte am Vortag', less: 'Weniger Schritte am Vortag' },
   { id: 'nap', k: 'napMin', lag: 1, g: 'before', label: 'Nickerchen', more: 'Längere Nickerchen am Vortag', less: 'Kürzere Nickerchen am Vortag' },
   { id: 'debt', k: 'debt', lag: 1, g: 'before', label: 'Schlafsaldo', more: 'Weniger Schlafmangel davor', less: 'Mehr Schlafmangel davor' },
+  { id: 'coffee', k: 'coffee', lag: 1, g: 'before', label: 'Letzter Kaffee', more: 'Später Kaffee am Vortag', less: 'Früher Kaffee am Vortag' },
   { id: 'bed', k: 'bed', lag: 0, g: 'night', label: 'Eingeschlafen', more: 'Später eingeschlafen', less: 'Früher eingeschlafen' },
   { id: 'slp', k: 'slp', lag: 0, g: 'night', label: 'Schlafdauer', more: 'Länger geschlafen', less: 'Kürzer geschlafen' },
   { id: 'wkend', k: 'wkend', lag: 0, g: 'night', bin: true, label: 'Wochenende', more: 'Öfter Nächte aufs Wochenende', less: 'Öfter Nächte unter der Woche' },
@@ -451,11 +454,79 @@ function unrest(db, idx, from, to) {
   };
 }
 
+/* ── 4. Kaffee ──────────────────────────────────────────────── */
+/* Die Uhrzeit des letzten Kaffees trägst Du selbst ein (Tageswert `coffee`,
+   Minuten seit Mitternacht; `noCoffee` = an dem Tag keiner). Er wirkt auf die
+   Nacht danach, und die steht im Schlaf-Eintrag des Folgetags. Gedrittelt
+   wird nach der Uhrzeit, wie im Steckbrief: spätes gegen frühes Drittel, mit
+   derselben strengen Schwelle, weil elf Größen auf einmal geprüft werden.
+   Tage ohne Kaffee zählen nicht als „früh", sie haben einen eigenen
+   Vergleich. Der Abstand zum Einschlafen steht dabei, weil Koffein nach der
+   Uhr abgebaut wird, nicht nach dem Kalender. */
+
+const COFFEE_OUT = [
+  { k: 'slpScore', label: 'Schlafscore', more: 'Höherer Schlafscore', less: 'Niedrigerer Schlafscore' },
+  { k: 'bed', label: 'Eingeschlafen', more: 'Später eingeschlafen', less: 'Früher eingeschlafen' },
+  { k: 'slp', label: 'Schlafdauer', more: 'Länger geschlafen', less: 'Kürzer geschlafen' },
+  { k: 'deepPct', label: 'Tiefschlaf', more: 'Mehr Tiefschlaf', less: 'Weniger Tiefschlaf' },
+  { k: 'remPct', label: 'REM-Schlaf', more: 'Mehr REM-Schlaf', less: 'Weniger REM-Schlaf' },
+  { k: 'awakeN', label: 'Aufgewacht', more: 'Öfter aufgewacht', less: 'Seltener aufgewacht' },
+  { k: 'awake', label: 'Wachzeit', more: 'Länger wach gelegen', less: 'Kürzer wach gelegen' },
+  { k: 'rm', label: 'Pulsspitzen', more: 'Mehr Pulsspitzen', less: 'Weniger Pulsspitzen' },
+  { k: 'slpHr', label: 'Puls im Schlaf', more: 'Höherer Puls im Schlaf', less: 'Niedrigerer Puls im Schlaf' },
+  { k: 'hrv', label: 'HRV', more: 'Höhere HRV', less: 'Niedrigere HRV' },
+  { k: 'hrLow', label: 'Pulstiefpunkt', more: 'Tiefster Puls später in der Nacht', less: 'Tiefster Puls früher in der Nacht' },
+];
+
+/** Jede Größe der Nacht in zwei Gruppen von Nächten vergleichen. */
+function outRows(db, idx, a, b) {
+  const rows = [];
+  for (const o of COFFEE_OUT) {
+    const h = a.map((p) => val(db, idx, o.k, p.d)).filter(fin);
+    const l = b.map((p) => val(db, idx, o.k, p.d)).filter(fin);
+    if (h.length < 5 || l.length < 5) continue;
+    const c = compare(h, l, false);
+    if (c) rows.push(Object.assign({ o }, c));
+  }
+  return rows;
+}
+
+const byT = (a, b) => Math.abs(b.t) - Math.abs(a.t);
+
+/** Kaffee und die Nacht danach im Zeitraum (Nächte von `from` bis `to`). */
+function coffee(db, idx, from, to) {
+  const days = db.days || {};
+  const pts = [], none = [];
+  let logged = 0;
+  for (const d of dateRange(addDays(from, -1), addDays(to, -1))) {
+    const x = days[d];
+    if (!x || !(fin(x.coffee) || x.noCoffee)) continue;
+    logged++;
+    const night = addDays(d, 1), n = days[night];
+    if (!n || !fin(n.slp)) continue;
+    if (fin(x.coffee)) pts.push({ d: night, y: x.coffee, gap: fin(n.bed) ? n.bed - x.coffee : null });
+    else none.push({ d: night });
+  }
+  const out = { logged, n: pts.length, nNone: none.length, enough: false, pts };
+  // Ohne Kaffee gegen mit: braucht keine Drittel, nur genug Nächte auf beiden Seiten
+  if (none.length >= MIN_GROUP && pts.length >= MIN_GROUP) out.none = outRows(db, idx, none, pts).sort(byT);
+  if (pts.length < MIN_NIGHTS) return out;
+  const s = split(pts, false);
+  if (s.hi.length < MIN_GROUP || s.lo.length < MIN_GROUP) return out;
+  const gap = (g) => { const v = g.map((p) => p.gap).filter(fin); return v.length ? median(v) : null; };
+  const rows = outRows(db, idx, s.hi, s.lo).sort(byT);
+  return Object.assign(out, {
+    enough: true, nHi: s.hi.length, nLo: s.lo.length, cutHi: s.cutHi, cutLo: s.cutLo,
+    gapHi: gap(s.hi), gapLo: gap(s.lo), rows,
+  });
+}
+
 return {
-  SPIKE, NIGHT_FIELDS, FACTORS, TARGETS, MIN_NIGHTS, T_SOLID,
+  SPIKE, NIGHT_FIELDS, FACTORS, TARGETS, MIN_NIGHTS, MIN_GROUP, T_SOLID,
   coverage, nightEvents, nightSummary,
   val, split, compare, targets, profile, headline,
   phaseGain, ideal, persistence, byHour, unrest,
+  COFFEE_OUT, coffee,
 };
 })(typeof Core !== 'undefined' ? Core : require('./core.js'));
 

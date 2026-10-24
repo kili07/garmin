@@ -129,6 +129,7 @@ button.card:active,button.mcard:active,.tile:active{background:var(--surface-2)}
 .row .end b{font:var(--w-num) 16px/20px var(--font-num); font-variant-numeric:tabular-nums}
 button.row{transition:background var(--t-fast)}
 button.row:active{background:var(--surface-2)}
+.row.sel{background:var(--surface-2)}
 .row > svg.chev{width:16px; height:16px; color:var(--muted); flex:none}
 .row-h{display:flex; gap:var(--s1); padding:var(--s1) var(--pad); background:var(--surface-2); border-bottom:1px solid var(--line)}
 .row-h span:last-child{margin-left:auto; text-transform:none; letter-spacing:0; font-weight:500; font-variant-numeric:tabular-nums}
@@ -152,6 +153,7 @@ button.row:active{background:var(--surface-2)}
 .btn{line-height:20px}
 .btn-col{display:flex; flex-direction:column; gap:var(--s1)}
 .btn[disabled]{opacity:.45; pointer-events:none}
+.btn.on{background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent)}
 .link{color:var(--accent); font-weight:600; min-height:44px; padding:0 var(--s-half)}
 .link.strong{font-weight:700}
 .danger-text{color:var(--st-low)}
@@ -208,7 +210,7 @@ button.row:active{background:var(--surface-2)}
 label,.sheet .lbl{display:block; margin-bottom:var(--s2)}
 label{font:600 var(--fs-label)/16px var(--font-ui); letter-spacing:var(--track-label); text-transform:uppercase; color:var(--muted)}
 label > input, label > select{margin-top:var(--s1)}
-input[type="text"],input[type="url"],input[type="password"],input[type="number"],input:not([type]),select{
+input[type="text"],input[type="url"],input[type="password"],input[type="number"],input[type="time"],input:not([type]),select{
   display:block; width:100%; min-height:48px; padding:12px 14px; border-radius:var(--r-sm);
   background:var(--surface); border:1px solid var(--line-2); color:var(--text);
   font:400 16px/24px var(--font-ui); letter-spacing:0; text-transform:none;
@@ -359,6 +361,24 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; backgrou
 .fit-me{display:grid; grid-template-columns:1fr 1.4fr; gap:12px; align-items:start}
 .fit-me label,.fit-me .lbl{margin-bottom:0}
 @media (max-width:360px){ .fit-me{grid-template-columns:1fr} }
+
+/* Letzter Kaffee: die Fläche öffnet das Sheet, „Jetzt" daneben trägt sofort
+   ein. Zwei Knöpfe nebeneinander, weil ein Knopf keinen Knopf enthalten darf. */
+.cof{display:flex; align-items:center; gap:var(--s1); padding-top:var(--s1); padding-bottom:var(--s1)}
+.cof-main{flex:1; min-width:0; display:flex; align-items:center; gap:12px; min-height:56px; text-align:left}
+.cof-main .grow > *{display:block}
+.cof-main > svg.chev,.cof-empty > svg.chev{width:16px; height:16px; color:var(--muted); flex:none}
+.cof-ic{display:flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:50%; background:var(--surface-2); color:var(--text-2); flex:none}
+.cof-ic svg{width:20px; height:20px}
+.cof-v{font:600 var(--fs-body)/24px var(--font-ui); margin-top:2px}
+.cof-v .num{font:var(--w-num) var(--fs-stat)/24px var(--font-num); font-variant-numeric:tabular-nums}
+.cof-v small{font:500 12px/1 var(--font-ui); color:var(--muted); margin-left:var(--s-half)}
+.cof-s{font-size:12px; line-height:16px; color:var(--muted)}
+.cof > .btn{flex:none}
+button.card.cof-empty{display:flex; align-items:center; gap:12px; font-size:var(--fs-small); line-height:20px; color:var(--text-2)}
+.cof-empty b{color:var(--text)}
+/* Lieber eine zweite Reihe Knöpfe als „Kein Kaffee" auf zwei Zeilen */
+.cof-btns > .btn{white-space:nowrap}
 
 /* Metrik-Karten: Label, Wert mit Pill, Sparkline der Woche */
 .grid2{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:var(--s1); margin-top:var(--s1)}

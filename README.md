@@ -47,10 +47,14 @@ eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das 
   (7 Tage), VO2max, Gewicht, Atmung und SpO2. Jede mit Wert, der Veränderung zum Vortag als Pill (Mint besser,
   Koralle schlechter, grau ohne Richtung oder im Rauschen) und den letzten sieben Tagen als kleine Linie mit Deinem
   Normalbereich als Band; der letzte Punkt zeigt die Lage zum Normalbereich. Antippen öffnet den Trend.
+- **Letzter Kaffee:** Unter dem Schlafscore trägst Du ein, wann Du zuletzt Kaffee getrunken hast. Heute reicht
+  ein Tipp auf „Jetzt“ bei jeder Tasse, es zählt die letzte. Antippen der Karte öffnet die Eingabe mit Uhrzeit,
+  „Kein Kaffee“ und den letzten sieben Tagen zum Nachtragen. Für vergangene Tage steht dabei, wie lange die Tasse
+  vor dem Einschlafen lag. Garmin weiß davon nichts, der Eintrag bleibt auf dem Gerät und kommt ins Backup.
 - **Woche auf einen Blick:** sieben Tage × sechs Werte als Tabelle, jede Zelle in der Farbe ihrer Abweichung.
 - Mit ‹ › durch frühere Tage blättern.
 
-**Trends** für 34 Kennzahlen, darunter Leichtschlaf, Wachzeit, Aufwachen, Tiefschlaf- und REM-Anteil, Pulsspitzen,
+**Trends** für 35 Kennzahlen (seit 2.1.0 auch Dein letzter Kaffee), darunter Leichtschlaf, Wachzeit, Aufwachen, Tiefschlaf- und REM-Anteil, Pulsspitzen,
 Pulstiefpunkt, Schlafmitte, Schlafsaldo (7 Nächte), Puls und Stress im Schlaf. Zeitraum über einen Umschalter:
 Woche, Monat, 3 Monate, Jahr oder alles. Oben das Mittel (bei Summen die Summe) mit der Veränderung zum Zeitraum
 davor, darunter Tageswerte, 7-Tage-Mittel als Linie mit Verlaufsfläche und Dein Normalbereich als Band, dann eine
@@ -79,6 +83,12 @@ lagen). Dazu Wochen- oder Monatsbalken, Mittel je Wochentag und der Vergleich mi
   REM) und wie oft jede Phase in Garmins Idealbereich lag.
 - **Unruhe:** wie oft Du pro Nacht aufwachst, Garmins Unruhe-Bewertung, ob unruhige Nächte gehäuft kommen und in
   welcher Stunde der Nacht die Pulsspitzen liegen.
+- **Kaffee:** Die Tage werden nach der Uhrzeit des letzten Kaffees gedrittelt, verglichen werden die Nächte nach
+  spätem und nach frühem Kaffee: Schlafscore, Einschlafzeit, Dauer, Tief- und REM-Anteil, Aufwachen, Wachzeit,
+  Pulsspitzen, Puls, HRV und Pulstiefpunkt. Oben die deutlichsten Unterschiede („Niedrigerer Schlafscore: 71 statt
+  83“), dazu wie lange die letzte Tasse meist vor dem Einschlafen lag und auf Wunsch alle Tage als Punkte. Tage
+  ohne Kaffee haben einen eigenen Vergleich. Ab 20 eingetragenen Tagen mit einer Nacht danach; bis dahin zeigt die
+  App, wie viele noch fehlen. Auch in „Was Deine Nächte unterscheidet“ zählt der Kaffee am Vortag mit.
 - **Nach Wochentag:** Score, Dauer, Tief, REM und Aufwachen je Wochentag, auffällige Tage farbig.
 
 Pulsspitzen und Pulstiefpunkt brauchen die Messreihen einer Nacht. Die App wertet bei jedem Abgleich bis zu drei
@@ -126,7 +136,8 @@ erzeugen und in der App eintragen.
 Alle Daten liegen nur auf dem Gerät: Tageswerte und Aktivitäten in `localStorage` (`garmin.v1`, etwa 280 KB pro
 Jahr), Kurven der Aktivitäten zwischengespeichert in IndexedDB (`garmin-files`). Schlüssel und Token liegen
 getrennt (`garmin.key`, `garmin.token`). Garmin behält alles. Ein Backup (Einstellungen → Backup speichern) spart
-aber den langen Neu-Abruf nach „Browserdaten löschen“.
+aber den langen Neu-Abruf nach „Browserdaten löschen“. Ausnahme sind Deine Kaffee-Einträge: Die gibt es nur auf dem
+Gerät und im Backup, Garmin kennt sie nicht.
 
 ## Entwickeln und testen
 

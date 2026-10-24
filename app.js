@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -110,7 +110,12 @@ function normalize(src) {
   if (!ps || typeof ps !== 'object' || typeof ps.date !== 'string') d.profile.sleep = null;
   d.days = (d.days && typeof d.days === 'object' && !Array.isArray(d.days)) ? d.days : {};
   for (const k of Object.keys(d.days)) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !d.days[k] || typeof d.days[k] !== 'object') delete d.days[k];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !d.days[k] || typeof d.days[k] !== 'object') { delete d.days[k]; continue; }
+    // Von Hand eingetragen (setCoffee): Minuten seit Mitternacht bzw. „kein Kaffee"
+    const x = d.days[k];
+    if ('coffee' in x && !(Number.isInteger(x.coffee) && x.coffee >= 0 && x.coffee < 1440)) delete x.coffee;
+    if ('noCoffee' in x && (x.noCoffee !== 1 || 'coffee' in x)) delete x.noCoffee;
+    if (!Object.keys(x).length) delete d.days[k];
   }
   d.acts = Array.isArray(d.acts) ? d.acts.filter((a) => a && a.id != null && typeof a.date === 'string') : [];
   d.acts.forEach((a) => { if (typeof a.start !== 'string') a.start = a.date + ' 00:00'; if (!a.type) a.type = 'other'; });
@@ -324,6 +329,7 @@ const ICON = {
   heart: lucide('<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/><path d="M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>'),
   watch: lucide('<path d="M12 10v2.2l1.6 1"/><path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05"/><path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05"/><circle cx="12" cy="12" r="6"/>'),
   moon: lucide('<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>'),
+  coffee: lucide('<path d="M10 2v2"/><path d="M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/>'),
 };
 const SPORT_ICON = {
   run: '<path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/><path d="M16 17h4"/><path d="M4 13h4"/>',
@@ -1001,6 +1007,7 @@ function renderToday() {
   }
 
   h += heroHtml(date, d);
+  h += coffeeCard(date);
   h += verdictHtml(rd);
   h += fitnessCard(date);
 
@@ -1095,6 +1102,99 @@ function verdictHtml(rd) {
     }).join('')}</div>`;
   }
   return h + '</div>';
+}
+
+/* ── Kaffee ─────────────────────────────────────────────────── */
+/* Garmin weiß nichts vom Kaffee, deshalb trägst Du ihn selbst ein: die
+   Uhrzeit der letzten Tasse eines Tages oder „kein Kaffee". Er liegt in den
+   Tageswerten (`coffee`, `noCoffee`), steht in keinem Core.FIELDS und
+   übersteht deshalb jeden Abgleich; mit dem Datensatz kommt er ins Backup.
+   Ausgewertet wird in Muster → Schlaf (Sleep.coffee). */
+
+const hhmm = (m) => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
+
+/** v: Minuten seit Mitternacht, 'none' für „kein Kaffee", null löscht. */
+function setCoffee(date, v) {
+  const x = db.days[date] || (db.days[date] = {});
+  delete x.coffee; delete x.noCoffee;
+  if (v === 'none') x.noCoffee = 1;
+  else if (fin(v)) x.coffee = v;
+  // Ohne Garmin-Werte bliebe sonst ein leerer Tag zurück
+  if (!Object.keys(x).length) delete db.days[date];
+  save();
+}
+
+function coffeeToast(date, v) {
+  const day = date === Core.today() ? '' : ` (${dayLabel(date)})`;
+  toast(v === 'none' ? `Kein Kaffee${day} eingetragen` : v == null ? 'Eintrag gelöscht' : `Letzter Kaffee ${Core.fmtClock(v)} Uhr${day}`);
+}
+
+/** Karte auf Heute: Uhrzeit des letzten Kaffees an diesem Tag. Heute mit
+    „Jetzt" für einen Tipp pro Tasse — es zählt die letzte. */
+function coffeeCard(date) {
+  const t = Core.today(), x = db.days[date] || {};
+  const n = db.days[Core.addDays(date, 1)] || {};
+  const gap = fin(x.coffee) && fin(n.bed) && n.bed > x.coffee ? n.bed - x.coffee : null;
+  let v, sub;
+  if (fin(x.coffee)) {
+    v = `<span class="num">${esc(Core.fmtClock(x.coffee))}</span><small>Uhr</small>`;
+    sub = gap ? `${Core.fmtDur(gap * 60)} vor dem Einschlafen` : date === t ? 'Bei jeder Tasse „Jetzt“ tippen' : '';
+  } else if (x.noCoffee) {
+    v = 'Kein Kaffee'; sub = '';
+  } else {
+    v = '<span class="muted">Nicht eingetragen</span>';
+    sub = date === t ? '„Jetzt“ trägt die Uhrzeit ein' : 'Antippen zum Nachtragen';
+  }
+  return `<div class="card cof">
+    <button class="cof-main" data-coffee="${date}">
+      <span class="cof-ic">${ICON.coffee}</span>
+      <span class="grow"><span class="lbl">Letzter Kaffee</span><span class="cof-v">${v}</span>${sub ? `<span class="cof-s">${esc(sub)}</span>` : ''}</span>
+      ${ICON.chev}
+    </button>
+    ${date === t ? '<button class="btn btn-sm" data-coffee-now>Jetzt</button>' : ''}
+  </div>`;
+}
+
+/** Eintragen und Nachtragen: Uhrzeit für einen Tag, darunter die letzten
+    sieben Tage zum Antippen. */
+function openCoffee(date) {
+  const t = Core.today(), x = db.days[date] || {};
+  const has = fin(x.coffee) || !!x.noCoffee;
+  const list = Core.dateRange(Core.addDays(t, -6), t).reverse();
+  const shown = (d) => {
+    const y = db.days[d] || {};
+    return fin(y.coffee) ? Core.fmtClock(y.coffee) : y.noCoffee ? 'keiner' : '–';
+  };
+  const h = `<p class="note" style="margin:0 2px var(--s2)"><b>${esc(dayLabel(date))}:</b> Wann hast Du zuletzt Kaffee getrunken? Espresso, Cola, Energydrinks und schwarzer Tee zählen mit. Die App vergleicht damit die Nächte danach (Muster → Schlaf).</p>
+    <label>Uhrzeit der letzten Tasse<input id="cofTime" type="time" value="${fin(x.coffee) ? hhmm(x.coffee) : ''}"></label>
+    <div class="btn-row cof-btns">
+      ${date === t ? '<button class="btn" id="cofNow">Jetzt</button>' : ''}
+      <button class="btn${x.noCoffee ? ' on' : ''}" id="cofNone" aria-pressed="${x.noCoffee ? 'true' : 'false'}">Kein Kaffee</button>
+      ${has ? '<button class="btn" id="cofDel">Löschen</button>' : ''}
+    </div>
+    <div class="sec-h">Letzte 7 Tage<span class="muted">antippen zum Nachtragen</span></div>
+    <div class="rows">${list.map((d) => `<button class="row${d === date ? ' sel' : ''}" data-cofday="${d}"${d === date ? ' aria-current="true"' : ''}>
+      <span class="grow"><span class="t">${esc(dayLabel(d))}</span></span><span class="end"><b class="num">${esc(shown(d))}</b></span>${ICON.chev}</button>`).join('')}</div>
+    <div class="btn-row" style="margin-top:var(--s3)"><button class="btn" id="cofPat">Auswertung ansehen</button></div>`;
+
+  const done = (v) => { setCoffee(date, v); closeSheet(); render(); coffeeToast(date, v); };
+  openSheet('Letzter Kaffee', h, () => {
+    const m = /^(\d{1,2}):(\d{2})/.exec($('#cofTime').value);
+    if (!m) { toast('Bitte eine Uhrzeit eintragen'); return; }
+    done(Math.min(1439, +m[1] * 60 + +m[2]));
+  });
+  if ($('#cofNow')) $('#cofNow').onclick = () => done(nowMin());
+  $('#cofNone').onclick = () => done('none');
+  if ($('#cofDel')) $('#cofDel').onclick = () => done(null);
+  $('#cofPat').onclick = () => {
+    closeSheet(); patTab = 'sleep'; nav('patterns');
+    const s = $('#cofSec'); if (s) s.scrollIntoView();
+  };
+  $('#sheetBody').onclick = (e) => {
+    const r = e.target.closest('[data-cofday]');
+    if (r) openCoffee(r.dataset.cofday);
+  };
 }
 
 /* ── 7a. Fitness-Score ──────────────────────────────────────── */
@@ -2402,7 +2502,59 @@ function sleepPatternsHtml(from, t) {
     h += `<div class="chips">${tgs.map((x) => `<button class="chip${x.k === sleepTarget ? ' on' : ''}" data-set="sleepTarget:${x.k}">${esc(x.label)}</button>`).join('')}</div>`;
     h += profileHtml(Sleep.profile(db, idx, sleepTarget, from, t));
   }
-  return h + phasesHtml(from, t) + unrestHtml(from, t) + nightWeekHtml(from, t);
+  return h + coffeeHtml(from, t) + phasesHtml(from, t) + unrestHtml(from, t) + nightWeekHtml(from, t);
+}
+
+/** Kaffee und Schlaf (Sleep.coffee): spätes gegen frühes Drittel der Tage
+    nach der Uhrzeit der letzten Tasse, jeweils die Nacht danach; dazu Tage
+    ohne gegen Tage mit Kaffee. */
+function coffeeHtml(from, t) {
+  const c = Sleep.coffee(db, idx, from, t);
+  let h = '<div class="sec-h" id="cofSec">Kaffee</div>';
+  const need = Sleep.MIN_NIGHTS;
+  if (!c.logged) {
+    return h + `<button class="card cof-empty" data-coffee="${Core.today()}"><span class="cof-ic">${ICON.coffee}</span><span class="grow">Trag auf Heute unter <b>Letzter Kaffee</b> ein, wann Du zuletzt Kaffee getrunken hast. Ab ${need} Tagen mit einer Nacht danach zeigt die App hier, ob späte Tassen Deinen Schlaf verändern.</span>${ICON.chev}</button>`;
+  }
+  // Größe der Nacht wie im Steckbrief: Wert, Unterschied, Farbe nur bei klarer Richtung
+  const f = (o) => ({ k: o.k });
+  const tbl = (rows, hiS, loS) => `<table class="pf-t"><thead><tr><th></th><th>${hiS}</th><th>${loS}</th><th>Unterschied</th></tr></thead><tbody>${rows.map((r) => {
+    const dir = (M[r.o.k] || {}).dir || 0;
+    const st = !r.solid || !dir ? '' : r.diff * dir > 0 ? 'good' : 'warn';
+    return `<tr${r.solid ? '' : ' class="dim"'}><td>${esc(r.o.label)}</td><td>${esc(pfVal(f(r.o), r.mH))}</td><td>${esc(pfVal(f(r.o), r.mL))}</td><td${st ? ` class="st-${st}"` : ''}>${esc(pfDelta(f(r.o), r.diff))}</td></tr>`;
+  }).join('')}</tbody></table>`;
+  const top = (rows, lead) => {
+    const s = rows.filter((r) => r.solid).slice(0, 3);
+    return s.length ? `<div class="pf-lead">${esc(lead)}</div><div class="pf-top">${s.map((r) => `<div><b>${esc(r.diff > 0 ? r.o.more : r.o.less)}</b><span>${esc(pfVal(f(r.o), r.mH))} statt ${esc(pfVal(f(r.o), r.mL))}</span></div>`).join('')}</div>` : '';
+  };
+
+  if (!c.enough) {
+    const pct = Math.min(100, Math.round((c.n / need) * 100));
+    h += `<div class="card"><div class="card-h">Später gegen früher Kaffee<span class="muted">${nf0.format(c.n)} von ${need} Tagen</span></div>
+      <div class="meter"><i style="width:${pct}%"></i></div>
+      <p class="note">Gezählt werden Tage mit eingetragener Uhrzeit, auf die eine Nacht mit Schlafdaten folgt.${c.n ? ` Bisher im Schnitt zuletzt um ${esc(Core.fmtClock(Core.mean(c.pts.map((p) => p.y))))} Uhr.` : ''} Für den Vergleich braucht es ${need}, davon mindestens ${Sleep.MIN_GROUP} späte und ${Sleep.MIN_GROUP} frühe.</p></div>`;
+  } else {
+    const box = (cut, name, n, g) => `<div><b class="num">${cut}</b><span>${name}<br>${nf0.format(n)} Nächte${fin(g) ? `<br>${esc(Core.fmtDur(g * 60))} vor dem Schlaf` : ''}</span></div>`;
+    h += `<div class="card pf"><div class="vs">${box('ab ' + esc(Core.fmtClock(c.cutHi)), 'Später Kaffee', c.nHi, c.gapHi)}${box('bis ' + esc(Core.fmtClock(c.cutLo)), 'Früher Kaffee', c.nLo, c.gapLo)}</div>`;
+    h += top(c.rows, 'Nach spätem Kaffee am deutlichsten anders')
+      || '<p class="note">Nach spätem Kaffee schläfst Du im Zeitraum nicht so deutlich anders als nach frühem, dass es kein Zufall sein könnte.</p>';
+    h += tbl(c.rows, 'spät', 'früh');
+    const sc = c.pts.map((p) => ({ x: p.y, y: Sleep.val(db, idx, 'slpScore', p.d) })).filter((p) => fin(p.y));
+    if (sc.length >= 10) {
+      h += openScatter.has('coffee')
+        ? `<div class="chart">${Charts.scatter(sc, { fmtX: (v) => Core.fmtClock(v), fmtY: (v) => nf0.format(v), fit: true, xLo: c.cutLo, xHi: c.cutHi, xLabel: 'Letzter Kaffee' })}</div>
+           <button class="link" data-scatter="coffee">Punkte ausblenden</button>`
+        : '<button class="link" data-scatter="coffee">Schlafscore nach Uhrzeit als Punkte zeigen</button>';
+    }
+    h += '<p class="note">Verglichen wird das Drittel der Tage mit dem spätesten letzten Kaffee mit dem Drittel mit dem frühesten, jeweils die Nacht danach; bei Gleichstand sind die Gruppen etwas größer. Koffein wird im Mittel in etwa fünf Stunden zur Hälfte abgebaut, deshalb steht dabei, wie lange die letzte Tasse meist vor dem Einschlafen lag (Median). Ein Unterschied ist noch keine Ursache: Wer spät Kaffee trinkt, ist vielleicht auch sonst länger auf.</p></div>';
+  }
+
+  if (c.none) {
+    h += `<div class="card pf"><div class="card-h">Ohne gegen mit Kaffee<span class="muted">${nf0.format(c.nNone)} gegen ${nf0.format(c.n)} Nächte</span></div>`;
+    h += top(c.none, 'Nach Tagen ohne Kaffee am deutlichsten anders')
+      || '<p class="note">Nach Tagen ohne Kaffee schläfst Du im Zeitraum nicht deutlich anders als nach Tagen mit.</p>';
+    h += tbl(c.none, 'ohne', 'mit') + '</div>';
+  }
+  return h;
 }
 
 /** Steckbrief: obere gegen untere Nächte, die deutlichsten Unterschiede
@@ -3056,6 +3208,9 @@ function wire() {
     if (ac) { openActivity(ac.dataset.act); return; }
     const ng = e.target.closest('[data-night]');
     if (ng) { openNight(ng.dataset.night); return; }
+    const cf = e.target.closest('[data-coffee]');
+    if (cf) { openCoffee(cf.dataset.coffee); return; }
+    if (e.target.closest('[data-coffee-now]')) { const v = nowMin(), d = Core.today(); setCoffee(d, v); render(); coffeeToast(d, v); return; }
     const fi = e.target.closest('[data-fitness]');
     if (fi) { openFitness(fi.dataset.fitness); return; }
     const dy = e.target.closest('[data-day]');
