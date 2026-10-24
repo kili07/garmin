@@ -448,31 +448,36 @@ function curve(xs, ys, o) {
 }
 
 /* ── Schlafphasen über die Nacht ────────────────────────────── */
-/** Phasen als Blöcke in vier Bahnen, Wach oben, Tief unten.
-    segs: [[von, bis, Stufe]] in Uhrzeit-Minuten (Achse wie xs),
-    Stufe 0 Tief, 1 Leicht, 2 REM, 3 Wach. xs ist das Raster der übrigen
-    Nachtkurven: gleiche Achse, gleiches Antippen. */
-function hypno(xs, segs, o) {
+/** Blöcke in Bahnen über die Nacht. rows: [[Beschriftung, Klasse]] von
+    oben nach unten, segs: [[von, bis, Bahn]] in Uhrzeit-Minuten (Achse wie
+    xs). xs ist das Raster der übrigen Nachtkurven: gleiche Achse, gleiches
+    Antippen. */
+function lanes(xs, segs, rows, o) {
   o = o || {};
-  const h = o.h || 112, x0 = 44, x1 = W - 8, top = 4, bot = h - 20;
+  const lane = 22, x0 = 44, x1 = W - 8, top = 4, bot = top + lane * rows.length, h = bot + 20;
   const n = xs.length;
   if (n < 2 || !segs.length) return '';
   const x = scale(xs[0], xs[n - 1], x0, x1);
-  const lane = (bot - top) / 4;
-  const row = { 3: 0, 2: 1, 1: 2, 0: 3 }, cls = ['ph-deep', 'ph-light', 'ph-rem', 'ph-awake'];
   let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${n}" data-x0="${x0}" data-x1="${x1}">`;
-  ['Wach', 'REM', 'Leicht', 'Tief'].forEach((l, i) => {
+  rows.forEach(([l], i) => {
     s += `<line class="grid" x1="${x0}" x2="${x1}" y1="${r1(top + lane * (i + 1))}" y2="${r1(top + lane * (i + 1))}"/>`
-      + `<text class="ax" x="${x0 - 6}" y="${r1(top + lane * (i + 0.5) + 3)}" text-anchor="end">${l}</text>`;
+      + `<text class="ax" x="${x0 - 6}" y="${r1(top + lane * (i + 0.5) + 3)}" text-anchor="end">${esc(l)}</text>`;
   });
   for (const [a, b, k] of segs) {
     const xa = Math.max(x0, x(a)), xb = Math.min(x1, x(b));
     if (xb <= xa) continue;
-    s += `<rect class="${cls[k]}" x="${r1(xa)}" y="${r1(top + lane * row[k] + 2)}" width="${r1(Math.max(0.6, xb - xa))}" height="${r1(lane - 4)}" rx="2"/>`;
+    s += `<rect class="${rows[k][1]}" x="${r1(xa)}" y="${r1(top + lane * k + 2)}" width="${r1(Math.max(0.6, xb - xa))}" height="${lane - 4}" rx="2"/>`;
   }
   for (const v of ticks(xs[0], xs[n - 1], 4, 60)) s += `<text class="ax" x="${r1(x(v))}" y="${h - 4}" text-anchor="middle">${esc((o.fmtX || String)(v))}</text>`;
   s += `<line class="cursor hidden" x1="0" x2="0" y1="${top}" y2="${bot}"/>`;
   return s + '</svg>';
+}
+
+/** Phasen in vier Bahnen, Wach oben, Tief unten. segs: [[von, bis, Stufe]],
+    Stufe 0 Tief, 1 Leicht, 2 REM, 3 Wach. */
+function hypno(xs, segs, o) {
+  const rows = [['Wach', 'ph-awake'], ['REM', 'ph-rem'], ['Leicht', 'ph-light'], ['Tief', 'ph-deep']];
+  return lanes(xs, segs.map(([a, b, k]) => [a, b, 3 - k]), rows, o);
 }
 
 /* ── Mini-Balken für Wochentage ─────────────────────────────── */
@@ -499,7 +504,7 @@ function weekdays(vals, o) {
   return s + '</svg>';
 }
 
-return { gauge, spark, trend, bars, scatter, load, track, curve, hypno, weekdays, ticks, dateTicks, esc };
+return { gauge, spark, trend, bars, scatter, load, track, curve, lanes, hypno, weekdays, ticks, dateTicks, esc };
 })();
 
 if (typeof module === 'object' && module.exports) module.exports = Charts;

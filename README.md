@@ -30,6 +30,10 @@ eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das 
   - Garmins Begründung zum Score („Lang, aber zu wenig REM“) und was vom Vortag hineinspielte, dazu Garmins
     Teilbewertungen für Dauer, Stress und Unruhe,
   - Puls, HRV, Atmung (mit Spanne), SpO2 (mit tiefstem Wert), Stress und Atemaussetzer, jeweils gegen Deinen Schnitt,
+  - **Wann wach?** (seit 2.2.0): Garmin nennt nur, wie lange und wie oft Du wach warst, nicht wann. Die App zeigt
+    auf der Zeitachse der Nacht, wo der Puls deutlich über Deinem Schlafniveau lag und wo die Uhr gar keinen Puls
+    gemessen hat, mit Uhrzeit und Dauer, gegen Garmins Summe. Sieht man davon im Puls wenig, kommt Garmins
+    Wachzeit vermutlich aus der Bewegung,
   - die Kurven der Nacht: Puls, HRV, Body Battery und SpO2 auf einer Zeitachse; antippen zeigt die Uhrzeit,
   - **Unruhe und Aufbau:** Pulsspitzen (der Puls springt kurz an, meist eine Weckreaktion) mit Uhrzeit, in der
     Pulskurve markiert, gegen Deinen Schnitt; wie sie sich über die Nacht verteilen, die längste ruhige Strecke und
@@ -163,7 +167,7 @@ Vor jedem Neuladen Service Worker und Caches leeren (siehe Bauanleitung, Abschni
 | `fonts/`, `licenses/` | Inter und Space Grotesk (SIL Open Font License), Lizenz der Lucide-Icons (ISC) |
 | `app.js` | Oberfläche, Speicher, Abgleich mit Garmin |
 | `core.js` | Umrechnung der Garmin-Antworten, Normalbereiche, Belastung, Zusammenhänge (in Node testbar) |
-| `sleep.js` | Schlafmuster: Pulsspitzen und Aufbau einer Nacht, Vergleich der Nächte, Phasen, Unruhe (in Node testbar) |
+| `sleep.js` | Schlafmuster: Pulsspitzen, Wach-Hinweise und Aufbau einer Nacht, Vergleich der Nächte, Phasen, Unruhe (in Node testbar) |
 | `charts.js` | Diagramme als SVG |
 | `fit.js` | ZIP und FIT lesen (Aktivitätsdateien) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline und Installieren |

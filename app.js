@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.2.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -1705,7 +1705,7 @@ function nightCurvesHtml(date, n) {
     const first = `<span>eingeschlafen</span><b>${esc(Core.fmtClock(n.s0))}</b><span class="end">aufgewacht ${esc(Core.fmtClock(n.s0 + n.len))}</span>`;
     h += `<div class="card"><div class="card-h">Phasen</div>${chartBox(Charts.hypno(xs, segs, { fmtX: Core.fmtClock }), reader, first, 's')}</div>`;
   } else {
-    h += '<p class="note" style="margin:0 2px var(--s1)">Den Verlauf der Phasen über die Nacht gibt Garmins Personal API nicht heraus, nur die Summen oben.</p>';
+    h += nightWakeHtml(date, n, g);
   }
   // Pulsspitzen (sleep.js) als Striche in der Pulskurve; Antippen nennt sie
   const ev = Sleep.nightEvents(n);
@@ -1733,6 +1733,56 @@ function nightCurvesHtml(date, n) {
   if (n.unm) h += `<p class="note">${esc(Core.fmtDur(n.unm))} ließen sich keiner Phase zuordnen.</p>`;
   if (n.note) h += `<div class="hint">${ICON.info}<div class="grow"><strong>Deine Notiz</strong><span>${esc(n.note)}</span></div></div>`;
   return h + nightPatternHtml(date, n, ev);
+}
+
+/** Wann Du wach gewesen sein könntest, wenn Garmin den Phasenverlauf nicht
+    mitschickt (Sleep.wakeHints): Strecken mit erhöhtem Puls und Lücken
+    ohne Puls, gegen Garmins Summe der Wachzeit. */
+function nightWakeHtml(date, n, g) {
+  const w = Sleep.wakeHints(n), d = db.days[date] || {};
+  const xs = g.xs;
+  const ups = (w && w.up) || [], gaps = (w && w.gaps) || [];
+  const clock = (m) => Core.fmtClock(n.s0 + m);
+  const mins = (m) => Core.fmtDur(m * 60);
+  const garmin = fin(d.awake) ? `Garmin: <b class="num">${esc(Core.fmtDur(d.awake))}</b> wach${fin(d.awakeN) ? `, ${nf0.format(d.awakeN)}× aufgewacht` : ''}` : '';
+  let h = `<div class="card"><div class="card-h">Wann wach?<span class="muted">aus dem Puls geschätzt</span></div>`;
+  if (garmin) h += `<p class="note" style="margin:0 0 var(--s1)">${garmin}. Wann genau, gibt Garmins Personal API nicht heraus.</p>`;
+  if (!w || (!ups.length && !gaps.length)) {
+    h += w && w.up
+      ? '<p class="note">Im Puls nichts Auffälliges: Er lag die ganze Nacht nah an Deinem Schlafniveau, und die Uhr hat lückenlos gemessen.</p>'
+      : '<p class="note">Für diese Nacht ist zu wenig Puls da.</p>';
+    return h + '</div>';
+  }
+
+  const segs = ups.map((s) => [n.s0 + s.a, n.s0 + s.b, 0]).concat(gaps.map((s) => [n.s0 + s.a, n.s0 + s.b, 1]));
+  const reader = (i) => {
+    const m = i * g.step;
+    const u = ups.find((s) => m >= s.a - 2 && m <= s.b + 2), gp = gaps.find((s) => m >= s.a && m <= s.b);
+    const what = u ? `<b>Puls erhöht</b><span class="end mk-t">+${nf0.format(u.up)} · ${esc(clock(u.a))}–${esc(clock(u.b))}</span>`
+      : gp ? `<b>kein Puls</b><span class="end">${esc(clock(gp.a))}–${esc(clock(gp.b))}</span>`
+      : `<b>${fin(g.hr[i]) ? nf0.format(g.hr[i]) + ' bpm' : '–'}</b><span class="end">ruhig</span>`;
+    return `<span>${esc(Core.fmtClock(xs[i]))}</span>${what}`;
+  };
+  const sum = [ups.length ? `erhöhter Puls <b>${esc(mins(w.upMin))}</b>` : '', gaps.length ? `ohne Puls <b>${esc(mins(w.gapMin))}</b>` : ''].filter(Boolean).join('<span>·</span>');
+  h += chartBox(Charts.lanes(xs, segs, [['erhöht', 'ph-awake'], ['Lücke', 'wk-gap']], { fmtX: Core.fmtClock }), reader, sum, 's');
+
+  // Liste nach Uhrzeit; kurze Spitzen (unter 6 min) nur gezählt, sie stehen unten bei den Pulsspitzen
+  const SHORT = 6;
+  const items = ups.filter((s) => s.dur >= SHORT).map((s) => [s.a, `${clock(s.a)}–${clock(s.b)}`,
+    `Puls +${nf0.format(s.up)}${s.edge === 'start' ? ' · beim Einschlafen' : s.edge === 'end' ? ' · beim Aufwachen' : ''}`, mins(s.dur), 'warn'])
+    .concat(gaps.map((s) => [s.a, `${clock(s.a)}–${clock(s.b)}`, 'kein Puls gemessen', mins(s.dur), '']))
+    .sort((x, y) => x[0] - y[0]);
+  const short = ups.filter((s) => s.dur < SHORT);
+  if (items.length) h += `<div class="qrows np-rows">${items.map(([, t, sub, v, st]) => `<div><span>${esc(t)}<small>${esc(sub)}</small></span><b class="num${st ? ' st-' + st : ''}">${esc(v)}</b></div>`).join('')}</div>`;
+  if (short.length) h += `<p class="note">Dazu ${short.length === 1 ? 'eine kurze Pulsspitze' : `${nf0.format(short.length)} kurze Pulsspitzen`} (${short.map((s) => clock(s.a)).join(', ')}): kurz wach oder fast wach, meist ohne Erinnerung daran.</p>`;
+
+  // Einordnung gegen Garmins Summe
+  const seen = (w.upMin || 0) + w.gapMin, aw = fin(d.awake) ? d.awake / 60 : null;
+  const notes = [];
+  if (aw != null && aw >= 20 && seen < aw * 0.5) notes.push(`Von Garmins ${esc(mins(aw))} sieht man im Puls nur ${esc(mins(seen))}. Für den Rest stützt sich Garmin auf die Bewegung, die die Personal API nicht mitschickt: Umdrehen oder unruhiges Liegen kann dann als wach zählen, obwohl Du geschlafen hast.`);
+  if (gaps.length) notes.push('In den Lücken hat die Uhr keinen Puls gemessen, meist weil das Band locker saß oder der Arm darauf lag. Was Garmin dort einträgt, ist geschätzt.');
+  if (ups.some((s) => s.dur >= SHORT)) notes.push('Erhöhter Puls: mindestens 8 Schläge über Deinem Schlafniveau dieser Stunde. Liegst Du wach, steigt er meist um 10 und mehr.');
+  return h + notes.map((t) => `<p class="note">${t}</p>`).join('') + '</div>';
 }
 
 /** Was sich in dieser Nacht erkennen lässt: Pulsspitzen, ruhigste Strecke,

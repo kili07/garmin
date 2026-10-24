@@ -425,6 +425,8 @@ button.card.cof-empty{display:flex; align-items:center; gap:12px; font-size:var(
 .ph-deep{background:var(--ph-deep)} .ph-light{background:var(--ph-light)} .ph-rem{background:var(--ph-rem)} .ph-awake{background:var(--ph-awake)}
 rect.ph-deep,path.ph-deep{fill:var(--ph-deep)} rect.ph-light,path.ph-light{fill:var(--ph-light)}
 rect.ph-rem,path.ph-rem{fill:var(--ph-rem)} rect.ph-awake,path.ph-awake{fill:var(--ph-awake)}
+/* Messlücke im Puls (Wann wach?): leer, gestrichelt umrandet */
+rect.wk-gap{fill:var(--surface-3); stroke:var(--muted); stroke-width:1; stroke-dasharray:3 2}
 .legend{display:flex; flex-wrap:wrap; align-items:center; gap:var(--s-half) var(--s2); margin-top:var(--s1); font-size:12px; line-height:16px; color:var(--muted)}
 .legend span{display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
 .legend i{width:8px; height:8px; border-radius:2px; display:inline-block; flex:none}

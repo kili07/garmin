@@ -7,8 +7,9 @@
 
    Inhalt
    1. Eine Nacht: Pulsspitzen (unruhige Momente), ruhigste Strecke,
-      Pulstiefpunkt und, wenn Garmin den Phasenverlauf mitschickt, der
-      Aufbau der Nacht aus Zyklen
+      Pulstiefpunkt, wann Du wach gewesen sein könntest (erhöhter Puls,
+      Lücken) und, wenn Garmin den Phasenverlauf mitschickt, der Aufbau der
+      Nacht aus Zyklen
    2. Steckbrief über viele Nächte: Was unterscheidet unruhige von ruhigen
       Nächten, solche mit viel von solchen mit wenig Tief- oder REM-Schlaf?
    3. Phasen über die Schlafdauer, Idealbereich, Verteilung der Unruhe,
@@ -124,6 +125,85 @@ function calmest(breaks, len) {
   }
   if (!best || len - cur > best.dur) best = { a: cur, b: len, dur: len - cur };
   return best;
+}
+
+/* Wann warst Du wach? Garmins Personal API nennt nur die Summe der Wachzeit
+   und wie oft, nicht wann. Garmin selbst entscheidet aus Bewegung und Puls;
+   die Bewegung schickt die API nicht mit. Die App zeigt deshalb, was sich im
+   Puls ablesen lässt: Strecken, in denen er deutlich über Deinem
+   Schlafniveau liegt (wach liegen hebt ihn um 10 und mehr Schläge), und
+   Lücken, in denen die Uhr keinen Puls gemessen hat (Band locker, Arm
+   unter dem Kopf) — dort rät Garmin. Schlafniveau ist das untere Viertel
+   des Pulses über ± 45 min: Anders als der Median der Pulsspitzen schluckt
+   es auch eine halbe Stunde Wachsein nicht. Die Ränder zählen hier mit,
+   weil Garmin wach Liegen vor dem Einschlafen und nach dem Aufwachen
+   ebenfalls als Wachzeit führt. */
+const WAKE = {
+  win: 45,        // Schlafniveau: unteres Viertel über ± 45 min
+  q: 0.25,
+  min: 8,         // mindestens 8 Schläge darüber …
+  k: 3,           // … und das 3-Fache des Rauschens dieser Nacht
+  join: 6,        // Strecken bis 6 min auseinander sind eine
+  gap: 10,        // ab 10 min ohne Pulswert: Messlücke
+  edge: 15,       // so nah am Einschlafen oder Aufwachen: „am Rand"
+};
+
+/** Strecken mit erhöhtem Puls und Messlücken einer Nacht (Core.mapNight).
+    Minuten ab dem Einschlafen. `up` ist null, wenn für eine Aussage zu
+    wenig Puls da ist; die Lücken gibt es trotzdem. */
+function wakeHints(n) {
+  if (!n || !(n.len > 0)) return null;
+  const len = n.len;
+  // Vor- und Nachlauf helfen beim Schlafniveau, gezählt wird nur in der Nacht
+  const all = (n.hr || []).filter((p) => fin(p[0]) && fin(p[1])).sort((x, y) => x[0] - y[0]);
+  const hr = all.filter((p) => p[0] >= 0 && p[0] <= len);
+  const dt = [];
+  for (let i = 1; i < hr.length; i++) dt.push(hr[i][0] - hr[i - 1][0]);
+  // Abstand der Messwerte (bei Garmin 2 min); jeder Wert steht für so viel Zeit
+  const step = Math.min(5, Math.max(1, median(dt) || 2));
+
+  // Lücken zwischen zwei Messwerten, auf die Nacht beschnitten (Vorlauf zählt als Messwert)
+  const gaps = [];
+  let last = -Infinity;
+  for (const [m] of all.concat([[Infinity]])) {
+    const a = Math.max(0, last), b = Math.min(len, m);
+    if (b - a > WAKE.gap) gaps.push({ a: Math.round(a), b: Math.round(b), dur: Math.round(b - a) });
+    last = m;
+  }
+
+  let up = null;
+  if (hr.length >= 20) {
+    const res = [], dev = [];
+    let lo = 0, hi = 0;
+    for (const [m, v] of hr) {
+      while (all[lo][0] < m - WAKE.win) lo++;
+      while (hi < all.length && all[hi][0] <= m + WAKE.win) hi++;
+      const w = all.slice(lo, hi).map((p) => p[1]);
+      res.push(v - Core.quantile(w, WAKE.q));
+      dev.push(Math.abs(v - median(w)));
+    }
+    const sigma = 1.4826 * median(dev) || 1;
+    const thr = Math.max(WAKE.min, WAKE.k * sigma);
+    up = [];
+    hr.forEach(([m, v], i) => {
+      if (res[i] < thr) return;
+      const a = Math.max(0, m - step / 2), b = Math.min(len, m + step / 2);
+      const s = up[up.length - 1];
+      if (s && a - s.b <= WAKE.join) {
+        s.b = b;
+        if (res[i] > s.up) { s.up = res[i]; s.hr = v; }
+      } else {
+        up.push({ a, b, up: res[i], hr: v });
+      }
+    });
+    up = up.map((s) => ({
+      a: Math.round(s.a), b: Math.round(s.b), dur: Math.round(s.b - s.a),
+      up: Math.round(s.up), hr: Math.round(s.hr),
+      edge: s.a < WAKE.edge ? 'start' : s.b > len - WAKE.edge ? 'end' : '',
+    }));
+  }
+  const total = (l) => (l ? l.reduce((t, s) => t + s.dur, 0) : null);
+  return { up, gaps, upMin: total(up), gapMin: total(gaps), step };
 }
 
 /** Alles, was sich aus den Messreihen einer Nacht (Core.mapNight) erkennen
@@ -523,7 +603,7 @@ function coffee(db, idx, from, to) {
 
 return {
   SPIKE, NIGHT_FIELDS, FACTORS, TARGETS, MIN_NIGHTS, MIN_GROUP, T_SOLID,
-  coverage, nightEvents, nightSummary,
+  WAKE, coverage, wakeHints, nightEvents, nightSummary,
   val, split, compare, targets, profile, headline,
   phaseGain, ideal, persistence, byHour, unrest,
   COFFEE_OUT, coffee,
