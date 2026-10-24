@@ -1,0 +1,143 @@
+/* ═══════════════════════════════════════════════════════════════
+   Garmin-Übersicht — Designtokens
+
+   Die eine Stelle für Farben, Schrift, Maße und Bewegung. style.css und
+   die Diagramme (über ihre Klassen) benutzen nur diese Variablen, ein
+   Theme überschreibt nur sie. Beschrieben in CLAUDE.md: wer hier etwas
+   ändert, zieht die Beschreibung dort mit.
+
+   Aufbau:
+   1. Schriften (liegen in fonts/, nachgeladen wird nichts)
+   2. Themenunabhängig: Raster, Radien, Typo, Bewegung, Leisten
+   3. Dunkel (Standard): Flächen, Text, Akzent, Zustände, Diagramme
+   4. Hell: dieselben Namen, eigene Werte
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 1. Schriften ───────────────────────────────────────────── */
+/* Variable Schriften, nur lateinischer Zeichensatz (Deutsch passt hinein,
+   seltene Zeichen wie → kommen aus der Systemschrift). Beide unter der
+   SIL Open Font License, Lizenztexte in fonts/. */
+@font-face{
+  font-family:"Inter"; font-style:normal; font-weight:100 900; font-display:swap;
+  src:url("fonts/inter-latin-wght-normal.woff2") format("woff2");
+}
+@font-face{
+  font-family:"Space Grotesk"; font-style:normal; font-weight:300 700; font-display:swap;
+  src:url("fonts/space-grotesk-latin-wght-normal.woff2") format("woff2");
+}
+
+/* ── 2. Themenunabhängig ────────────────────────────────────── */
+:root{
+  /* Raster: alle Abstände in 8er-Schritten. 4 px nur als Feinabstand
+     innerhalb kleiner Bausteine (Pill, Legende, Zeile). */
+  --s-half:4px; --s1:8px; --s2:16px; --s3:24px; --s4:32px; --s5:40px; --s6:48px;
+  --pad:16px;                    /* Seitenrand und Innenabstand der Karten */
+
+  --r-sm:8px;                    /* Felder, Zellen, kleine Flächen in Karten */
+  --r-card:16px;                 /* Karten */
+  --r-sheet:24px;                /* oberer Rand des Sheets */
+  --r-pill:999px;                /* Pills, Chips, Knöpfe, Segmente */
+
+  /* Space Grotesk nur für Kennzahlen, Inter für alles andere */
+  --font-ui:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-num:"Space Grotesk","Inter",system-ui,sans-serif;
+  --fs-hero:72px;                /* die eine Zahl im Hero */
+  --fs-big:48px;                 /* Kopfzahl einer Detailansicht */
+  --fs-card:30px;                /* Wert einer Metrik-Karte */
+  --fs-stat:20px;                /* Kennwerte in Reihen */
+  --fs-body:15px; --fs-small:13px; --fs-label:11px;
+  --w-num:600;
+  --track-label:.08em;           /* Laufweite der Großbuchstaben-Labels */
+
+  /* Bewegung: ease-out, Gauges und Zähler in 600 ms. Die Zähler in app.js
+     rechnen mit derselben Kurve (1 − (1 − t)³). */
+  --ease-out:cubic-bezier(.33,1,.68,1);
+  --t-fast:.14s; --t-mid:.22s; --t-fill:.6s;
+
+  /* Untere Leiste: deckt den sicheren Bereich (Home-Indikator) selbst mit ab */
+  --tab-h:64px;
+  --tab-safe:env(safe-area-inset-bottom, 0px);
+
+  /* Altnamen aus 1.x. Nur noch, damit älterer Code nicht bricht —
+     neue Bausteine nehmen die Namen oben. */
+  --sp-1:var(--s-half); --sp-2:var(--s1); --sp-3:var(--s2); --sp-4:var(--s2); --sp-5:var(--s3); --sp-6:var(--s3);
+  --r:var(--r-card); --r-xs:var(--r-sm); --r-lg:var(--r-card); --r-xl:var(--r-sheet);
+  --font-display:var(--font-ui);
+  --fast:var(--t-fast); --mid:var(--t-mid); --ease:var(--ease-out);
+}
+
+/* ── 3. Dunkel (Standard) ───────────────────────────────────── */
+/* Gilt ohne data-theme und mit data-theme="dark". */
+:root,
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  /* Flächen: Grund, Karte eine Stufe heller, dann Mulden und gedrückt */
+  --bg:#0E1116; --surface:#171B22; --surface-2:#1D2129; --surface-3:#252A34;
+  --line:#232833;                /* 1px-Ränder statt Schatten */
+  --line-2:#2F3642;              /* Spur von Gauge und Balken, Trenner in Karten */
+
+  --text:#EEF1F5; --text-2:#B6BDC9;
+  --muted:#8A93A3;               /* Labels; 5,6:1 auf der Karte */
+
+  /* Ein Akzent für Aktionen und Hervorhebungen */
+  --accent:#5EEAD4; --on-accent:#0E1116;
+  --accent-soft:rgba(94,234,212,.12); --accent-line:rgba(94,234,212,.4);
+
+  /* Zustände: niedrig → mittel → hoch. Nie allein, immer mit Wort oder Zahl. */
+  --st-low:#F8907F; --st-mid:#E8C586; --st-high:#5EEAD4;
+  --st-low-soft:rgba(248,144,127,.14); --st-mid-soft:rgba(232,197,134,.14); --st-high-soft:rgba(94,234,212,.12);
+  --st-off:#8A93A3; --st-off-soft:rgba(138,147,163,.14);
+
+  --raised:#2C323D;              /* aktives Segment über der Mulde */
+  --knob:#EEF1F5;                /* Knopf im Schalter */
+  --scrim:rgba(5,7,10,.72);
+
+  /* Diagramme: Gitter und Achsen leise, die Linie im Akzent */
+  --grid:#232833; --ax:#8A93A3; --pt:#535B69;
+  --avg:#5EEAD4;
+  --area-op:.26;                 /* Deckkraft oben in der Verlaufsfläche, unten 0 */
+  --band:rgba(138,147,163,.12);
+  --bar:#5EEAD4; --bar-dim:#2F3642;
+  --goal:#8A93A3; --fit:#B6BDC9; --split:#2F3642;
+  --acute:#5EEAD4; --acute-soft:rgba(94,234,212,.16); --chronic:#B6BDC9;
+  /* Kurven der Nacht, je eine eigene Farbe */
+  --c-hr:#E07084; --c-hrv:#9F7ED6; --c-bb:#5EEAD4; --c-spo2:#4AA3D2;
+  /* Schlafphasen (geprüft: Nachbarn auch bei Rot-Grün-Schwäche trennbar) */
+  --ph-deep:#4F62C1; --ph-light:#3E9DCA; --ph-rem:#9550A9; --ph-awake:#CD7A4D;
+  /* Pulszonen 1–5, zugleich die Stufen der Streckenfarbe */
+  --z1:#6B7585; --z2:#407BC5; --z3:#2DA892; --z4:#B58A3A; --z5:#B24743;
+  /* Sportarten (geprüft in der Reihenfolge der gestapelten Balken) */
+  --sp-run:#CA723C; --sp-bike:#1495B5; --sp-swim:#425EBB; --sp-walk:#50A064;
+  --sp-strength:#8F5FC0; --sp-winter:#AC8F38; --sp-other:#6B7585;
+
+  /* Altnamen, siehe oben */
+  --up:var(--st-high); --down:var(--st-low); --warn:var(--st-mid);
+  --up-soft:var(--st-high-soft); --down-soft:var(--st-low-soft); --warn-soft:var(--st-mid-soft);
+}
+
+/* ── 4. Hell ────────────────────────────────────────────────── */
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#F4F6F8; --surface:#FFFFFF; --surface-2:#EDF0F4; --surface-3:#E4E8EE;
+  --line:#DFE3E9; --line-2:#CFD5DC;
+  --text:#13161C; --text-2:#474D58; --muted:#646C79;
+  --accent:#007A6D; --on-accent:#FFFFFF;
+  --accent-soft:rgba(0,122,109,.10); --accent-line:rgba(0,122,109,.4);
+  --st-low:#B94739; --st-mid:#9C681A; --st-high:#007A6D;
+  --st-low-soft:rgba(185,71,57,.10); --st-mid-soft:rgba(156,104,26,.12); --st-high-soft:rgba(0,122,109,.10);
+  --st-off:#646C79; --st-off-soft:rgba(100,108,121,.10);
+  --raised:#FFFFFF; --knob:#FFFFFF;
+  --scrim:rgba(14,17,22,.4);
+  --grid:#E7EAEF; --ax:#646C79; --pt:#A8AEB8;
+  --avg:#007A6D;
+  --area-op:.16;
+  --band:rgba(100,108,121,.10);
+  --bar:#007A6D; --bar-dim:#CFD5DC;
+  --goal:#646C79; --fit:#474D58; --split:#CFD5DC;
+  --acute:#007A6D; --acute-soft:rgba(0,122,109,.14); --chronic:#474D58;
+  --c-hr:#C2415B; --c-hrv:#7A55C2; --c-bb:#007A6D; --c-spo2:#1F7FB8;
+  --ph-deep:#4657BD; --ph-light:#3E9DCA; --ph-rem:#8F4AA3; --ph-awake:#D87D4C;
+  --z1:#9AA3B2; --z2:#3A75BF; --z3:#23A28C; --z4:#C5953B; --z5:#C34F4B;
+  --sp-run:#C7692C; --sp-bike:#168DB2; --sp-swim:#3752AE; --sp-walk:#4A9A5E;
+  --sp-strength:#8959BA; --sp-winter:#AC8F38; --sp-other:#9AA3B2;
+}

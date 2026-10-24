@@ -4,13 +4,18 @@ Deine Garmin-Daten auf einen Blick, besser sortiert als in Garmin Connect: **Wie
 **lange Trends über Monate und Jahre** und **welche Gewohnheiten bei Dir was bewirken**.
 
 Reines HTML, CSS und JavaScript nach der Bauanleitung (`PWA-ANLEITUNG.md`): kein Build, keine Abhängigkeiten,
-installierbar als Web-App, offline lesbar. Die Daten holt die App über Garmins offizielle **Personal API** mit Deinem
+installierbar als Web-App, offline lesbar. Seit 2.0.0 ein dunkles, ruhiges Dashboard fürs Handy: die Zahlen groß in
+Space Grotesk, alles andere in Inter, ein Akzent in Mint, Zustände von Koralle über Sand bis Mint. Schriften und
+Icons (Lucide) liegen in der App, nachgeladen wird nichts. Das Designsystem steht in `CLAUDE.md`, die Werte in
+`tokens.css`. Die Daten holt die App über Garmins offizielle **Personal API** mit Deinem
 eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das über einen kleinen eigenen Proxy
 (Cloudflare Worker, kostenlos). Warum, steht in `DECISIONS.md`.
 
 ## Was sie kann
 
 **Heute**
+- **Schlafscore** der letzten Nacht groß in einem Halbkreis, in der Farbe von Garmins Einordnung (gut, mittel,
+  schwach), darunter Dauer gegen Bedarf, Puls und Aufwachen gegen Deinen Schnitt und die Phasen als Streifen.
 - **Erholung:** HRV, Ruhepuls, Schlaf, Belastung und Body Battery, jedes Signal gegen *Deinen eigenen*
   Normalbereich der letzten Wochen, dazu eine Einschätzung in einem Satz. Garmins „Training Readiness“ gibt die
   API nicht her; die App zeigt stattdessen offen, woraus sich so ein Wert zusammensetzt.
@@ -19,8 +24,7 @@ eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das 
   Ruhepuls (15 %), Schritte (15 %) und aktive Tage pro Woche (10 %), jeder Teil gegen einen festen Maßstab.
   Dazu die Veränderung in vier Wochen. Antippen zeigt den Verlauf über sechs Monate, jeden Teil mit seinem Wert,
   wo am meisten zu holen ist und wie gerechnet wird. Jahrgang und Geschlecht lassen sich dort eintragen.
-- **Schlaf der letzten Nacht:** Score, Dauer gegen Schlafbedarf, Einschlaf- und Aufwachzeit, Phasen, Puls, Atmung.
-  Antippen öffnet **die Nacht im Detail:**
+- Antippen des Schlafscores öffnet **die Nacht im Detail:**
   - jede Phase (Tief, Leicht, REM, Wach) mit Dauer, Anteil, Garmins Bewertung, Garmins Idealbereich und Deinem
     Schnitt der 30 Nächte davor,
   - Garmins Begründung zum Score („Lang, aber zu wenig REM“) und was vom Vortag hineinspielte, dazu Garmins
@@ -39,16 +43,19 @@ eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das 
   Mit ‹ › geht es Nacht für Nacht zurück. Den Verlauf der Phasen über die Nacht (das Balkendiagramm aus Garmin
   Connect) gibt die Personal API laut Beschreibung nicht her, Garmins eigene „unruhige Momente“ (aus der Bewegung)
   ebenso wenig. Schickt Garmin sie doch mit, zeigt die App sie.
-- **Kacheln** für HRV, Ruhepuls, Body Battery, Stress, Schritte, Intensitätsminuten (Woche), Belastung (7 Tage), VO2max,
-  Gewicht, Atmung und SpO2. Jede mit Abstand zu Deinem Mittel und dem Verlauf der letzten zwei Wochen; antippen
-  öffnet den Trend.
+- **Kennzahlen** als Karten für HRV, Ruhepuls, Body Battery, Stress, Schritte, Intensitätsminuten (Woche), Belastung
+  (7 Tage), VO2max, Gewicht, Atmung und SpO2. Jede mit Wert, der Veränderung zum Vortag als Pill (Mint besser,
+  Koralle schlechter, grau ohne Richtung oder im Rauschen) und den letzten sieben Tagen als kleine Linie mit Deinem
+  Normalbereich als Band; der letzte Punkt zeigt die Lage zum Normalbereich. Antippen öffnet den Trend.
 - **Woche auf einen Blick:** sieben Tage × sechs Werte als Tabelle, jede Zelle in der Farbe ihrer Abweichung.
 - Mit ‹ › durch frühere Tage blättern.
 
 **Trends** für 34 Kennzahlen, darunter Leichtschlaf, Wachzeit, Aufwachen, Tiefschlaf- und REM-Anteil, Pulsspitzen,
-Pulstiefpunkt, Schlafmitte, Schlafsaldo (7 Nächte), Puls und Stress im Schlaf, über 4 Wochen, 3 Monate, 1 Jahr oder alles: Tageswerte, 7-Tage-Mittel und Dein
-Normalbereich als Band; Vergleich mit dem Zeitraum davor und mit dem Vorjahr; Trend pro Monat; Wochen- oder
-Monatsbalken; Mittel je Wochentag. Bei Schlaf-Kennzahlen zusätzlich die Phasen als gestapelte Balken: je Nacht
+Pulstiefpunkt, Schlafmitte, Schlafsaldo (7 Nächte), Puls und Stress im Schlaf. Zeitraum über einen Umschalter:
+Woche, Monat, 3 Monate, Jahr oder alles. Oben das Mittel (bei Summen die Summe) mit der Veränderung zum Zeitraum
+davor, darunter Tageswerte, 7-Tage-Mittel als Linie mit Verlaufsfläche und Dein Normalbereich als Band, dann eine
+Einordnung in ganzen Sätzen (besser oder schlechter als davor, Tendenz pro Monat, wie viele Tage im Normalbereich
+lagen). Dazu Wochen- oder Monatsbalken, Mittel je Wochentag und der Vergleich mit dem Vorjahr. Bei Schlaf-Kennzahlen zusätzlich die Phasen als gestapelte Balken: je Nacht
 (4 Wochen), je Woche oder je Monat. Diagramme antippen zeigt den Wert an der Stelle.
 
 **Training**
@@ -139,7 +146,10 @@ Vor jedem Neuladen Service Worker und Caches leeren (siehe Bauanleitung, Abschni
 
 | Datei | Inhalt |
 |---|---|
-| `index.html`, `style.css` | Gerüst und Aussehen |
+| `index.html` | Gerüst, Kopf- und Tab-Leiste |
+| `tokens.css` | Designtokens: Farben beider Themes, Schrift, Raster, Radien, Bewegung (beschrieben in `CLAUDE.md`) |
+| `style.css` | Bausteine, nur mit Tokens |
+| `fonts/`, `licenses/` | Inter und Space Grotesk (SIL Open Font License), Lizenz der Lucide-Icons (ISC) |
 | `app.js` | Oberfläche, Speicher, Abgleich mit Garmin |
 | `core.js` | Umrechnung der Garmin-Antworten, Normalbereiche, Belastung, Zusammenhänge (in Node testbar) |
 | `sleep.js` | Schlafmuster: Pulsspitzen und Aufbau einer Nacht, Vergleich der Nächte, Phasen, Unruhe (in Node testbar) |

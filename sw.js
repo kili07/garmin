@@ -4,10 +4,11 @@
 
    Anfragen an den Proxy (andere Adresse) fasst er nie an: Garmin-Daten
    kommen immer frisch, und offline zeigt die App, was in localStorage liegt. */
-const CACHE = 'garmin-v7';
+const CACHE = 'garmin-v8';
 
 const ASSETS = [
-  './', './index.html', './style.css', './core.js', './sleep.js', './charts.js', './fit.js', './app.js',
+  './', './index.html', './tokens.css', './style.css', './core.js', './sleep.js', './charts.js', './fit.js', './app.js',
+  './fonts/inter-latin-wght-normal.woff2', './fonts/space-grotesk-latin-wght-normal.woff2',
   './manifest.webmanifest', './proxy/worker.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
 ];

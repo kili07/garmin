@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '2.0.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -40,10 +40,10 @@ const CF_PAGE = 'https://dash.cloudflare.com/';
 
 /* `bar` ist die Hintergrundfarbe des Themes und landet im
    <meta name="theme-color">, damit die Systemleiste des Handys mitzieht —
-   muss mit --bg in style.css übereinstimmen. */
+   muss mit --bg in tokens.css übereinstimmen. */
 const THEMES = {
-  dark: { label: 'Dunkel', bar: '#0b0e14' },
-  light: { label: 'Hell', bar: '#f3f5f9' },
+  dark: { label: 'Dunkel', bar: '#0E1116' },
+  light: { label: 'Hell', bar: '#F4F6F8' },
 };
 
 /** Frische Grundstruktur. Basis beim Laden und beim Backup-Import, damit
@@ -170,6 +170,7 @@ const nfPct = new Intl.NumberFormat('de-DE', { style: 'percent', maximumFraction
 const dfDay = new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
 const dfDayY = new Intl.DateTimeFormat('de-DE', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 const dfDate = new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'short', year: 'numeric' });
+const dfShort = new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'short' });
 const dfMonth = new Intl.DateTimeFormat('de-DE', { month: 'short' });
 const dfMonthY = new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' });
 const dfTime = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -232,6 +233,68 @@ function splitVal(key, v) {
 }
 const valHtml = (key, v) => { const [a, u] = splitVal(key, v); return `${esc(a)}${u ? `<small>${esc(u)}</small>` : ''}`; };
 
+/** Zahl, die beim ersten Zeichnen hochzählt (siehe runAnims). Im HTML steht
+    der fertige Text; `to` ist die Zahl dahinter, bei fmt 'hm' in Minuten. */
+const countSpan = (text, to, dec, fmt) => (fin(to)
+  ? `<span data-count="${to}"${dec ? ' data-dec="1"' : ''}${fmt ? ` data-fmt="${fmt}"` : ''}>${esc(text)}</span>` : esc(text));
+
+/** Wie valHtml, aber die Zahl zählt hoch — nur wenn sie sich wieder genau so
+    schreiben lässt (ganze Zahl, eine Nachkommastelle oder Stunden:Minuten).
+    Uhrzeiten und Zählwerte bleiben stehen. */
+function numHtml(key, v) {
+  const [a, u] = splitVal(key, v);
+  const unit = u ? `<small>${esc(u)}</small>` : '';
+  if (!fin(v)) return esc(a) + unit;
+  const m = M[key] || {};
+  if (m.fmt === 'dur' || m.fmt === 'min') {
+    const mins = Math.round(m.fmt === 'dur' ? v / 60 : v);
+    if (mins >= 60 && a === `${Math.floor(mins / 60)}:${pad2(mins % 60)}`) return countSpan(a, mins, 0, 'hm') + unit;
+    if (mins >= 0 && a === String(mins)) return countSpan(a, mins) + unit;
+    return esc(a) + unit;
+  }
+  if (a === nf0.format(v)) return countSpan(a, Math.round(v)) + unit;
+  if (a === nf1.format(v)) return countSpan(a, Math.round(v * 10) / 10, 1) + unit;
+  return esc(a) + unit;
+}
+
+/* ── Bewegung ───────────────────────────────────────────────────
+   Zahlen zählen hoch, Gauges und Balken füllen sich, in 600 ms mit
+   ease-out (dieselbe Kurve wie --ease-out in tokens.css). Nur nach einem
+   Wechsel durch Dich — Tab, Tag, Auswahl —, nicht wenn der Abgleich
+   zwischendurch neu zeichnet. Im HTML steht immer der Endwert: Läuft
+   nichts (reduzierte Bewegung, Seite im Hintergrund), stimmt die Anzeige
+   trotzdem. */
+let animNext = true;
+const ANIM_MS = 600;
+const reduceMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+function runAnims(root) {
+  if (!root || reduceMotion() || document.hidden) return;
+  root.classList.add('anim');
+  setTimeout(() => root.classList.remove('anim'), ANIM_MS + 100);
+  $$('.gauge-fill, .meter > i', root).forEach((e) => e.classList.add('anim'));
+  const items = $$('[data-count]', root).map((e) => ({ e, end: e.textContent, to: +e.dataset.count, dec: !!e.dataset.dec, hm: e.dataset.fmt === 'hm' }));
+  if (!items.length) return;
+  const show = (it, v) => {
+    it.e.textContent = it.hm ? `${Math.floor(v / 60)}:${pad2(Math.floor(v % 60))}` : (it.dec ? nf1 : nf0).format(v);
+  };
+  let done = false;
+  const finish = () => { if (!done) { done = true; items.forEach((it) => { it.e.textContent = it.end; }); } };
+  const t0 = performance.now();
+  const step = (now) => {
+    if (done) return;
+    const p = Math.min(1, (now - t0) / ANIM_MS);
+    if (p >= 1) { finish(); return; }
+    const k = 1 - Math.pow(1 - p, 3);
+    items.forEach((it) => show(it, it.to * k));
+    requestAnimationFrame(step);
+  };
+  items.forEach((it) => show(it, 0));
+  requestAnimationFrame(step);
+  // Falls requestAnimationFrame nicht kommt (Tab im Hintergrund): Endwerte trotzdem setzen
+  setTimeout(finish, ANIM_MS + 250);
+}
+
 /* Werte, die sich über den Tag erst ansammeln: heute noch nicht bewerten,
    sonst stünden morgens immer „zu wenig Schritte" da. */
 const ACCUM = ['steps', 'im', 'kcalAct', 'floors', 'load', 'trainMin', 'bbChg'];
@@ -245,28 +308,35 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.add('hidden'), 2600);
 }
 
+/* Icons: Lucide (ISC-Lizenz, licenses/lucide-ISC.txt), Pfade unverändert
+   aus dem Paket lucide-static. Ein Laufsymbol hat Lucide nicht, Laufen
+   bekommt deshalb die Fußspuren. */
+const lucide = (paths, cls) => `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const ICON = {
-  info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
-  warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/></svg>',
-  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
-  chev: '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
-  left: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
-  right: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
-  heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.4-8.6-8.8C2.2 7.9 4.1 5 7.2 5c2 0 3.4 1.1 4.8 2.8C13.4 6.1 14.8 5 16.8 5c3.1 0 5 2.9 3.8 6.2C19 15.6 12 20 12 20z"/></svg>',
-  watch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="3"/><path d="M9 6l1-3h4l1 3M9 18l1 3h4l1-3M12 9.5V12l1.5 1.5"/></svg>',
+  info: lucide('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
+  warn: lucide('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
+  check: lucide('<path d="M20 6 9 17l-5-5"/>'),
+  chev: lucide('<path d="m9 18 6-6-6-6"/>', 'chev'),
+  left: lucide('<path d="m15 18-6-6 6-6"/>'),
+  right: lucide('<path d="m9 18 6-6-6-6"/>'),
+  up: lucide('<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>'),
+  down: lucide('<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>'),
+  heart: lucide('<path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/><path d="M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/>'),
+  watch: lucide('<path d="M12 10v2.2l1.6 1"/><path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05"/><path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05"/><circle cx="12" cy="12" r="6"/>'),
+  moon: lucide('<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>'),
 };
 const SPORT_ICON = {
-  run: '<circle cx="14" cy="4" r="2"/><path d="M8 21l3-7 3 3v4"/><path d="M6 12l3-4 4 1 3 3h3"/>',
-  bike: '<circle cx="6" cy="16" r="3.5"/><circle cx="18" cy="16" r="3.5"/><path d="M6 16l4-7h5l3 7M9 6h3M15 9l-3 7"/>',
-  swim: '<path d="M2 18c2 0 2-1.5 4-1.5S8 18 10 18s2-1.5 4-1.5 2 1.5 4 1.5 2-1.5 4-1.5"/><path d="M6 13l4-5 4 3 3-3"/><circle cx="18" cy="5" r="2"/>',
-  walk: '<circle cx="13" cy="4" r="2"/><path d="M9 21l2-6 3 2v4M8 12l2-4 4 1 2 4"/>',
-  strength: '<path d="M6 7v10M18 7v10M3 10v4M21 10v4M6 12h12"/>',
-  winter: '<path d="M12 2v20M4.9 4.9l14.2 14.2M2 12h20M4.9 19.1 19.1 4.9"/>',
-  other: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+  run: '<path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/><path d="M16 17h4"/><path d="M4 13h4"/>',
+  bike: '<circle cx="18.5" cy="17.5" r="3.5"/><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="15" cy="5" r="1"/><path d="M12 17.5V14l-3-3 4-3 2 3h2"/>',
+  swim: '<path d="M2 12q2.5 2 5 0t5 0 5 0 5 0"/><path d="M2 19q2.5 2 5 0t5 0 5 0 5 0"/><path d="M2 5q2.5 2 5 0t5 0 5 0 5 0"/>',
+  walk: '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
+  strength: '<path d="M17.596 12.768a2 2 0 1 0 2.829-2.829l-1.768-1.767a2 2 0 0 0 2.828-2.829l-2.828-2.828a2 2 0 0 0-2.829 2.828l-1.767-1.768a2 2 0 1 0-2.829 2.829z"/><path d="m2.5 21.5 1.4-1.4"/><path d="m20.1 3.9 1.4-1.4"/><path d="M5.343 21.485a2 2 0 1 0 2.829-2.828l1.767 1.768a2 2 0 1 0 2.829-2.829l-6.364-6.364a2 2 0 1 0-2.829 2.829l1.768 1.767a2 2 0 0 0-2.828 2.829z"/><path d="m9.6 14.4 4.8-4.8"/>',
+  winter: '<path d="m10 20-1.25-2.5L6 18"/><path d="M10 4 8.75 6.5 6 6"/><path d="m14 20 1.25-2.5L18 18"/><path d="m14 4 1.25 2.5L18 6"/><path d="m17 21-3-6h-4"/><path d="m17 3-3 6 1.5 3"/><path d="M2 12h6.5L10 9"/><path d="m20 10-1.5 2 1.5 2"/><path d="M22 12h-6.5L14 15"/><path d="m4 10 1.5 2L4 14"/><path d="m7 21 3-6-1.5-3"/><path d="m7 3 3 6h4"/>',
+  other: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
 };
 const sportIcon = (type) => {
   const sp = Core.sportOf(type);
-  return `<span class="act-ic sp-${sp}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${SPORT_ICON[sp]}</svg></span>`;
+  return `<span class="act-ic sp-${sp}">${lucide(SPORT_ICON[sp])}</span>`;
 };
 
 /* ── 3. Schlüssel, Token, API ───────────────────────────────── */
@@ -812,7 +882,7 @@ function restoreViewState() {
   // Ein Tag, der inzwischen „heute" oder Zukunft ist, wird wieder zu „heute"
   if (typeof s.dayView === 'string' && s.dayView < Core.today()) dayView = s.dayView;
   if (typeof s.trendKey === 'string') trendKey = s.trendKey;      // renderTrends prüft, ob es ihn gibt
-  if (typeof s.trendRange === 'number') trendRange = s.trendRange;
+  if (RANGES.some(([r]) => r === s.trendRange)) trendRange = s.trendRange;
   if (typeof s.trainPeriod === 'string') trainPeriod = s.trainPeriod;
   if (typeof s.trainSport === 'string') trainSport = s.trainSport;
   if (typeof s.bestScope === 'string') bestScope = s.bestScope;
@@ -829,6 +899,7 @@ function nav(v) {
   $('#viewTitle').textContent = TITLES[v] || '';
   window.scrollTo(0, 0);
   armBack();                    // Zurück soll auf „Heute" führen, nicht aus der App
+  animNext = true;
   render();
 }
 
@@ -844,6 +915,7 @@ function render() {
   else if (view === 'trends') renderTrends();
   else if (view === 'training') renderTraining();
   else if (view === 'patterns') renderPatterns();
+  if (animNext) { animNext = false; runAnims($('#view-' + view)); }
 }
 
 /* Antippen eines Diagramms zeigt den Wert an dieser Stelle über dem
@@ -916,58 +988,23 @@ function renderToday() {
   const date = dayView && dayView < t ? dayView : t;
   const d = db.days[date] || {};
   const rd = Core.readiness(db, idx, date);
-  const v = rd.verdict;
   const oldest = db.sync.from || date;
 
   let h = `<div class="daynav">
     <button class="icon-btn" data-daystep="-1" aria-label="Tag davor"${date <= oldest ? ' disabled' : ''}>${ICON.left}</button>
-    <strong>${esc(dayLabel(date))}${date !== t ? '' : ' · ' + esc(dfDay.format(pdate(date)))}</strong>
+    <strong>${esc(date === t ? dfDay.format(pdate(date)) : dayLabel(date) === 'Gestern' ? 'Gestern · ' + dfDay.format(pdate(date)) : dayLabel(date))}</strong>
     <button class="icon-btn" data-daystep="1" aria-label="Tag danach"${date >= t ? ' disabled' : ''}>${ICON.right}</button>
   </div>`;
 
   if (db.sync.error && date === t) {
-    h += `<div class="hint err">${ICON.warn}<div class="grow"><strong>Abgleich fehlgeschlagen</strong><span>${esc(db.sync.error)}</span></div></div>`;
+    h += `<div class="hint err top">${ICON.warn}<div class="grow"><strong>Abgleich fehlgeschlagen</strong><span>${esc(db.sync.error)}</span></div></div>`;
   }
 
-  // Erholung: die Signale einzeln, jedes gegen den eigenen Normalbereich
-  h += `<div class="hero" style="margin-top:4px">
-    <div class="hero-top"><div class="hero-ring st-${v.status || 'off'}">${v.status === 'good' || v.status === 'ok' ? ICON.check : v.status ? ICON.warn : ICON.info}</div>
-      <div class="grow"><div class="hero-t">${esc(v.title)}</div><div class="hero-s">${esc(v.text)}</div></div></div>`;
-  if (rd.signals.length) {
-    h += '<div class="signals">' + rd.signals.map((s) => {
-      let val, sub;
-      if (s.key === 'load') { val = nf1.format(s.value) + '×'; sub = s.text; }
-      else if (s.key === 'slpScore') { val = Core.fmt(s.valueKey, s.value); sub = fin(d.slp) ? Core.fmtDur(d.slp) : ''; }
-      else if (s.key === 'hrv') { val = Core.fmt('hrv', s.value); sub = s.base && fin(s.base.lo) ? `normal ${nf0.format(s.base.lo)}–${nf0.format(s.base.hi)}` : ''; }
-      else if (s.key === 'rhr') { val = Core.fmt('rhr', s.value); sub = s.base ? `Ø ${nf0.format(s.base.mean)}` : ''; }
-      else { val = Core.fmt(s.key, s.value); sub = ''; }
-      return `<button class="sig" data-trend="${s.key === 'load' ? 'load' : s.key}"><span class="sig-l"><i class="dot st-${s.status || 'off'}"></i>${esc(s.label)}</span>
-        <span class="sig-v">${esc(val)}</span><span class="sig-s">${esc(sub)}</span></button>`;
-    }).join('') + '</div>';
-  }
-  h += '</div>';
-
+  h += heroHtml(date, d);
+  h += verdictHtml(rd);
   h += fitnessCard(date);
 
-  // Schlaf der Nacht vor diesem Tag
-  if (fin(d.slp)) {
-    const ph = [['deep', 'Tief'], ['light', 'Leicht'], ['rem', 'REM'], ['awake', 'Wach']].filter(([k]) => fin(d[k]) && d[k] > 0);
-    const tot = ph.reduce((s, [k]) => s + d[k], 0) || 1;
-    const need = fin(d.need) ? ` · Bedarf ${Core.fmtDur(d.need * 60)}` : '';
-    h += `<button class="card sleep-card" data-night="${date}" style="margin-top:var(--sp-3)">
-      <div class="card-h">Schlaf<span class="muted">${fin(d.bed) && fin(d.wake) ? esc(Core.fmtClock(d.bed) + ' – ' + Core.fmtClock(d.wake)) : ''}</span>${ICON.chev}</div>
-      <div class="sl-top">
-        ${fin(d.slpScore) ? `<div class="sl-score">${nf0.format(d.slpScore)}<small>${esc(qualLabel(d.slpQ))}</small></div>` : ''}
-        <div class="sl-facts"><span><b>${esc(Core.fmtDur(d.slp))}</b> geschlafen${esc(need)}</span>
-          ${fin(d.slpHr) ? `<span>Puls im Schlaf <b>${nf0.format(d.slpHr)}</b>${fin(d.awakeN) ? ` · ${nf0.format(d.awakeN)}× wach` : ''}</span>` : ''}
-          ${fin(d.slpResp) ? `<span>Atmung <b>${nf1.format(d.slpResp)}</b>/min${fin(d.slpSpo2) ? ` · SpO2 <b>${nf0.format(d.slpSpo2)}</b> %` : ''}</span>` : ''}</div>
-      </div>
-      ${ph.length ? `<div class="phases">${ph.map(([k]) => `<i class="ph-${k}" style="width:${(d[k] / tot) * 100}%"></i>`).join('')}</div>
-      <div class="legend">${ph.map(([k, l]) => `<span><i class="ph-${k}"></i>${l} <b>${esc(Core.fmtDur(d[k]))}</b></span>`).join('')}</div>` : ''}
-    </button>`;
-  }
-
-  // Kacheln: jede mit Abstand zum eigenen 30-Tage-Mittel und den letzten zwei Wochen
+  // Metrik-Karten: Wert, Veränderung zum Vortag, die letzten sieben Tage
   const recentDays = Core.dateRange(Core.addDays(date, -13), date).map((x) => db.days[x] || {});
   const keys = ['hrv', 'rhr', 'bbMax', 'stress', 'steps', 'im', 'load', 'vo2', 'weight', 'slpResp', 'spo2'].filter((k) => {
     if (k === 'load') return db.acts.length > 0;
@@ -975,7 +1012,10 @@ function renderToday() {
     if (M[k].sparse) return Core.series(db, idx, k, Core.addDays(date, -sparseDays(k)), date).some(fin);
     return Core.series(db, idx, k, Core.addDays(date, -13), date).some(fin);
   });
-  h += '<div class="tiles">' + keys.map((k) => tile(k, date)).join('') + '</div>';
+  if (keys.length) {
+    h += `<div class="sec-h">Kennzahlen<span class="muted">Veränderung zum Vortag · letzte 7 Tage</span></div>
+      <div class="grid2">${keys.map((k, i) => tile(k, date, keys.length % 2 === 1 && i === keys.length - 1)).join('')}</div>`;
+  }
 
   h += weekTable(date);
 
@@ -984,8 +1024,77 @@ function renderToday() {
     h += `<div class="sec-h">Letzte Aktivitäten<button class="link" data-nav="training">Alle</button></div>
       <div class="rows">${recent.map(actRow).join('')}</div>`;
   }
-  if (date !== t) h += `<div class="btn-row" style="margin-top:var(--sp-4)"><button class="btn" data-day="${t}">Zurück zu heute</button></div>`;
+  if (date !== t) h += `<div class="btn-row" style="margin-top:var(--s3)"><button class="btn" data-day="${t}">Zurück zu heute</button></div>`;
   el.innerHTML = h;
+}
+
+/** Hero: der Schlafscore der Nacht vor diesem Tag, groß im Halbkreis. Die
+    Farbe folgt Garmins Wort zur Nacht (gut, mittel, schwach). Darunter
+    Dauer gegen Bedarf, Einschlafzeit und Puls im Schlaf, jeweils mit
+    Deinem Schnitt, und die Phasen als Streifen. Antippen öffnet die Nacht. */
+/** Zustand und Wort zum Schlafscore einer Nacht: Garmins Einordnung
+    (ausgezeichnet, gut, mittel, schwach), sonst nach dem Score selbst. */
+function sleepQual(d) {
+  const sc = d.slpScore;
+  const q = { EXCELLENT: 'E', GOOD: 'G', FAIR: 'F', POOR: 'P' }[d.slpQ];
+  const st = q ? Q_ST[q] : fin(sc) ? (sc >= 80 ? 'good' : sc >= 60 ? 'warn' : 'bad') : 'off';
+  const w = qualLabel(d.slpQ);
+  return { st, word: w ? w[0].toUpperCase() + w.slice(1) : '' };
+}
+
+function heroHtml(date, d) {
+  const sc = d.slpScore;
+  const { st, word: qw } = sleepQual(d);
+  const has = fin(d.slp);
+  const span = fin(d.bed) && fin(d.wake) ? `${Core.fmtClock(d.bed)} – ${Core.fmtClock(d.wake)}` : '';
+  let h = `<${has ? `button class="card hero" data-night="${date}"` : 'div class="card hero"'}>
+    <div class="head"><span class="lbl">Schlafscore</span>${span ? `<span class="end">${esc(span)}</span>` : ''}${has ? ICON.chev : ''}</div>
+    <div class="gauge-wrap">${Charts.gauge(sc, { st })}
+      <div class="gauge-val"><span class="num${fin(sc) ? '' : ' na'}">${fin(sc) ? countSpan(nf0.format(sc), sc) : '–'}</span></div></div>
+    <div class="gauge-ends"><span>0</span><span>100</span></div>`;
+  if (fin(sc) && qw) h += `<div class="hero-q"><span class="pill st-${st}">${esc(qw)}</span></div>`;
+  if (!has) return h + '<p class="hero-line">Für diese Nacht hat Garmin keinen Schlaf.</p></div>';
+  if (!fin(sc)) h += '<p class="hero-line">Für diese Nacht gibt es keinen Score.</p>';
+
+  // Kennwerte der Nacht, jeweils mit Deinem Schnitt der 30 Nächte davor
+  const need = fin(d.need) ? d.need * 60 : null;
+  const hrAvg = nightMean(date, (x) => x.slpHr);
+  const awAvg = nightMean(date, (x) => x.awakeN);
+  const cells = [['Dauer', numHtml('slp', d.slp), need ? `Bedarf ${Core.fmtDur(need)}` : '']];
+  if (fin(d.slpHr)) cells.push(['Puls', `${countSpan(nf0.format(d.slpHr), Math.round(d.slpHr))}<small>bpm</small>`, hrAvg != null ? `Ø ${nf0.format(hrAvg)}` : '']);
+  if (fin(d.awakeN)) cells.push(['Aufgewacht', `${countSpan(nf0.format(d.awakeN), d.awakeN)}<small>×</small>`, awAvg != null ? `Ø ${nf1.format(awAvg)}` : '']);
+  h += `<div class="stats" style="grid-template-columns:repeat(${cells.length},minmax(0,1fr))">${cells.map(([l, v, sub]) => `<div><span class="lbl">${l}</span><span class="v">${v}</span>${sub ? `<span class="d">${esc(sub)}</span>` : ''}</div>`).join('')}</div>`;
+
+  // Phasen als Streifen, darunter je Phase die Dauer (h:mm, damit die Spalten gleich lesen)
+  const ph = [['deep', 'Tief'], ['light', 'Leicht'], ['rem', 'REM'], ['awake', 'Wach']].filter(([k]) => fin(d[k]) && d[k] > 0);
+  const tot = ph.reduce((s, [k]) => s + d[k], 0) || 1;
+  const hm = (sec) => { const m = Math.round(sec / 60); return `${Math.floor(m / 60)}:${pad2(m % 60)}`; };
+  if (ph.length) {
+    h += `<div class="phases">${ph.map(([k]) => `<i class="ph-${k}" style="flex:${(d[k] / tot).toFixed(4)} 1 0"></i>`).join('')}</div>
+      <div class="ph-key">${ph.map(([k, l]) => `<div><span class="lbl"><i class="ph-${k}"></i>${l}</span><span class="num">${hm(d[k])}</span></div>`).join('')}</div>`;
+  }
+  return h + '</button>';
+}
+
+const ST_WORD = { good: 'besser als normal', ok: 'normal', warn: 'unter normal', bad: 'deutlich unter normal', off: 'ohne Urteil' };
+
+/** Erholung: das Urteil aus den Signalen, jedes gegen Deinen Normalbereich —
+    keine erfundene Gesamtzahl. Antippen eines Signals öffnet seinen Trend. */
+function verdictHtml(rd) {
+  const v = rd.verdict;
+  let h = `<div class="card"><div class="head"><span class="lbl">Erholung</span>${rd.signals.length ? `<span class="end">${rd.signals.length} ${rd.signals.length === 1 ? 'Signal' : 'Signale'}</span>` : ''}</div>
+    <div class="verdict-t"><i class="dot st-${v.status || 'off'}"></i>${esc(v.title)}</div>
+    <p class="verdict-s">${esc(v.text)}</p>`;
+  if (rd.signals.length) {
+    h += `<div class="sigs">${rd.signals.map((s) => {
+      let val;
+      if (s.key === 'load') val = nf1.format(s.value) + '×';
+      else if (s.valueKey === 'slp') val = Core.fmtDur(s.value);
+      else val = Core.fmt(s.valueKey || s.key, s.value, true);
+      return `<button class="sig" data-trend="${s.key}" aria-label="${esc(`${s.label} ${val}, ${ST_WORD[s.status || 'off']}`)}"><i class="dot st-${s.status || 'off'}"></i><span>${esc(s.label)}</span><b>${esc(val)}</b></button>`;
+    }).join('')}</div>`;
+  }
+  return h + '</div>';
 }
 
 /* ── 7a. Fitness-Score ──────────────────────────────────────── */
@@ -999,32 +1108,41 @@ function fitMe(date) {
   return { age: b ? +date.slice(0, 4) - b : null, sex: db.settings.sex || '' };
 }
 
-function fitRing(f, big) {
-  return `<div class="fit-ring st-${f.status}${big ? ' big' : ''}" style="--p:${f.score}"><b>${nf0.format(f.score)}</b></div>`;
-}
-
-/** „+4 in 4 Wochen" — gegen den Score 28 Tage davor, wenn es ihn gab. */
-function fitDelta(date, f) {
+/** Veränderung gegen den Score 28 Tage davor, wenn es ihn gab — sonst null. */
+function fitDeltaN(date, f) {
   const old = Core.fitness(db, idx, Core.addDays(date, -28), fitMe(date));
-  if (old.score == null) return '';
-  const dd = f.score - old.score;
+  return old.score == null ? null : f.score - old.score;
+}
+/** „+4 in 4 Wochen" als Text (Fitness-Sheet). */
+function fitDelta(date, f) {
+  const dd = fitDeltaN(date, f);
+  if (dd == null) return '';
   return dd ? `${dd > 0 ? '+' : '−'}${Math.abs(dd)} in 4 Wochen` : 'gleich wie vor 4 Wochen';
 }
+/** Dieselbe Veränderung als Pill: Pfeil und Zahl, Mint besser, Koralle schlechter. */
+function fitPill(dd) {
+  if (dd == null) return '';
+  if (!dd) return '<span class="pill st-off">±0</span>';
+  // Bis 2 Punkte ist es eher Schwankung als Veränderung
+  return `<span class="pill st-${Math.abs(dd) < 3 ? 'off' : dd > 0 ? 'good' : 'bad'}" aria-label="${esc(`${dd > 0 ? '+' : '−'}${Math.abs(dd)} in 4 Wochen`)}">${dd > 0 ? ICON.up : ICON.down}${Math.abs(dd)}</span>`;
+}
+/** Die fünf Teile, je mit Wert und dünnem Balken. */
+const partSt = (v) => (v >= 70 ? 'st-good' : v >= 40 ? 'st-warn' : 'st-bad');
+const fitPartsHtml = (f) => `<div class="fit-parts">${f.parts.map((p) => `<div><span>${esc(p.label)}</span><b class="num">${nf0.format(p.score)}</b>
+  <div class="meter"><i class="${partSt(p.score)}" style="width:${p.score}%"></i></div></div>`).join('')}</div>`;
 
 function fitnessCard(date) {
   const f = Core.fitness(db, idx, date, fitMe(date));
+  const head = `<div class="head"><span class="lbl">Fitness</span><span class="end">letzte 4 Wochen</span>${ICON.chev}</div>`;
   if (f.score == null) {
-    return `<button class="card fit-card" data-fitness="${date}" style="margin-top:var(--sp-3)">
-      <div class="card-h">Fitness<span class="muted">letzte 4 Wochen</span>${ICON.chev}</div>
-      <p class="note" style="margin:0">Für den Fitness-Score braucht es etwa drei Wochen Daten.</p></button>`;
+    return `<button class="card fit-card" data-fitness="${date}">${head}
+      <p class="note">Für den Fitness-Score braucht es etwa drei Wochen Daten.</p></button>`;
   }
-  const delta = fitDelta(date, f);
-  return `<button class="card fit-card" data-fitness="${date}" style="margin-top:var(--sp-3)">
-    <div class="card-h">Fitness<span class="muted">letzte 4 Wochen</span>${ICON.chev}</div>
-    <div class="fit-top">${fitRing(f)}
-      <div class="grow"><div class="fit-t">${esc(f.label)}</div>${delta ? `<div class="fit-s">${esc(delta)}</div>` : ''}</div></div>
-    <div class="fit-parts">${f.parts.map((p) => `<div><span>${esc(p.label)}</span><b>${nf0.format(p.score)}</b>
-      <div class="meter"><i class="${p.score >= 70 ? 'full' : ''}" style="width:${p.score}%"></i></div></div>`).join('')}</div>
+  const dd = fitDeltaN(date, f);
+  return `<button class="card fit-card" data-fitness="${date}">${head}
+    <div class="fit-top"><span class="num">${countSpan(nf0.format(f.score), f.score)}</span>
+      <div class="grow"><div class="fit-t">${esc(f.label)}</div>${dd != null ? `<div class="fit-s">${fitPill(dd)}<span class="muted small"> in 4 Wochen</span></div>` : ''}</div></div>
+    ${fitPartsHtml(f)}
   </button>`;
 }
 
@@ -1073,10 +1191,12 @@ function openFitness(date) {
   const f = Core.fitness(db, idx, date, me);
   let h = '';
   if (f.score != null) {
-    const delta = fitDelta(date, f);
-    h += `<div class="fit-top" style="margin-bottom:var(--sp-3)">${fitRing(f, true)}
+    const dd = fitDeltaN(date, f);
+    const when = [dayLabel(date) === 'Heute' ? '' : 'Stand ' + dayLabel(date), dd != null ? 'in 4 Wochen' : ''].filter(Boolean).join(' · ');
+    h += `<div class="card"><div class="fit-big"><span class="num">${countSpan(nf0.format(f.score), f.score)}</span>
       <div class="grow"><div class="fit-t">${esc(f.label)}</div>
-      <div class="fit-s">${esc([dayLabel(date) === 'Heute' ? '' : 'Stand ' + dayLabel(date), delta].filter(Boolean).join(' · ') || 'Stand der letzten vier Wochen')}</div></div></div>`;
+      <div class="fit-s">${fitPill(dd)}<span class="muted small"> ${esc(when || 'Stand der letzten vier Wochen')}</span></div></div></div>
+      ${fitPartsHtml(f)}</div>`;
 
     const from = maxDate(firstDate(), Core.addDays(date, -179));
     const dates = Core.dateRange(from, date);
@@ -1086,7 +1206,7 @@ function openFitness(date) {
       h += `<div class="sec-h">Verlauf<span class="muted">${dates.length > 120 ? '6 Monate' : nf0.format(dates.length) + ' Tage'}</span></div>
         <div class="card">${chartBox(Charts.trend({ dates, vals, avg: vals, h: 150, fmtY: (v) => nf0.format(v) }), rd, rd(dates.length - 1), 's')}</div>`;
     }
-    if (f.next) h += `<div class="hint" style="margin-top:var(--sp-3)">${ICON.info}<div class="grow"><span>${esc(fitNextText(f))}</span></div></div>`;
+    if (f.next) h += `<div class="hint" style="margin-top:var(--s2)">${ICON.info}<div class="grow"><span>${esc(fitNextText(f))}</span></div></div>`;
   } else {
     h += '<p class="dlg-t">Für den Fitness-Score braucht es mindestens drei der fünf Teile, die meisten davon aus drei Wochen Daten.</p>';
   }
@@ -1096,7 +1216,7 @@ function openFitness(date) {
     const attr = p.key === 'vo2' ? 'data-nav="training"' : `data-trend="${tk}"`;
     return `<button class="row fit-row" ${attr}><span class="grow"><span class="t">${esc(p.label)}<em>${f.score != null ? `zählt ${nf0.format(p.share * 100)} %` : ''}</em></span>
       <span class="sub">${esc(fitPartText(p, me))}</span>
-      <div class="meter"><i class="${p.score >= 70 ? 'full' : ''}" style="width:${p.score}%"></i></div></span>
+      <div class="meter"><i class="${partSt(p.score)}" style="width:${p.score}%"></i></div></span>
       <span class="end"><b class="num">${nf0.format(p.score)}</b></span>${ICON.chev}</button>`;
   }).join('')}${f.missing.map((k) => {
     const def = Core.FIT_PARTS.find((x) => x.key === k);
@@ -1105,7 +1225,7 @@ function openFitness(date) {
 
   const yr = new Date().getFullYear();
   h += `<div class="sec-h">Über Dich</div>
-    <p class="note" style="margin:0 2px var(--sp-3)">VO2max hängt stark von Alter und Geschlecht ab. Mit beidem vergleicht der Score mit Deiner Gruppe statt mit allen. Bleibt auf diesem Gerät.</p>
+    <p class="note" style="margin:0 2px var(--s2)">VO2max hängt stark von Alter und Geschlecht ab. Mit beidem vergleicht der Score mit Deiner Gruppe statt mit allen. Bleibt auf diesem Gerät.</p>
     <div class="fit-me">
       <label>Jahrgang<input id="fitBorn" type="number" inputmode="numeric" min="1900" max="${yr - 10}" placeholder="z. B. 1990" value="${db.settings.born || ''}"></label>
       <div class="lbl">Geschlecht<div class="seg" id="fitSex">${[['m', 'Mann'], ['f', 'Frau'], ['', 'offen']].map(([v, l]) => `<button data-v="${v}" class="${db.settings.sex === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
@@ -1113,14 +1233,14 @@ function openFitness(date) {
 
   h += `<div class="sec-h">Wie gerechnet wird</div>
     <p class="note" style="margin:0 2px">Fünf Teile, jeder 0–100 gegen einen festen Maßstab, nicht gegen Deinen eigenen Schnitt. Gezählt werden die vier Wochen vor dem Tag, VO2max ist der letzte Wert der letzten 120 Tage.</p>
-    <div class="card qrows" style="margin-top:var(--sp-3)">
+    <div class="card qrows" style="margin-top:var(--s2)">
       <div><span>VO2max · 35 %</span><b>Garmins Tabelle nach Alter und Geschlecht</b></div>
       <div><span>Intensität · 25 %</span><b>150 / Woche = 60, 300 = 85</b></div>
       <div><span>Ruhepuls · 15 %</span><b>62 = 60, 52 = 85</b></div>
       <div><span>Schritte · 15 %</span><b>7500 = 65, 10 000 = 85</b></div>
       <div><span>Aktive Tage · 10 %</span><b>3 Tage / Woche = 65, 5 = 100</b></div>
     </div>
-    <p class="note" style="margin:var(--sp-2) 2px 0">Fehlt ein Teil, zählen die übrigen anteilig mehr. HRV fehlt bewusst: Sie unterscheidet sich von Mensch zu Mensch so stark, dass es keinen festen Maßstab gibt. Das ist eine eigene Zahl dieser App, nicht Garmins Fitnessalter.</p>`;
+    <p class="note" style="margin:var(--s1) 2px 0">Fehlt ein Teil, zählen die übrigen anteilig mehr. HRV fehlt bewusst: Sie unterscheidet sich von Mensch zu Mensch so stark, dass es keinen festen Maßstab gibt. Das ist eine eigene Zahl dieser App, nicht Garmins Fitnessalter.</p>`;
 
   openSheet('Fitness', h, null);
   // Nach einer Änderung neu zeichnen, ohne nach oben zu springen
@@ -1233,8 +1353,9 @@ function openNight(date) {
   const need = fin(d.need) ? d.need * 60 : null;
   const fb = SLEEP_FB[d.slpFb], ins = SLEEP_INS[d.slpIns];
   const needSt = need ? (d.slp >= need - 15 * 60 ? 'good' : d.slp >= need - 90 * 60 ? 'warn' : 'bad') : '';
+  const sq = sleepQual(d);
   h += `<div class="card sleep-card"><div class="sl-top">
-      ${fin(d.slpScore) ? `<div class="sl-score">${nf0.format(d.slpScore)}<small>${esc(qualLabel(d.slpQ))}</small></div>` : ''}
+      ${fin(d.slpScore) ? `<div class="sl-score"><span class="num">${countSpan(nf0.format(d.slpScore), d.slpScore)}</span>${sq.word ? `<span class="pill st-${sq.st}">${esc(sq.word)}</span>` : ''}</div>` : ''}
       <div class="sl-facts"><span><b>${esc(Core.fmtDur(d.slp))}</b> geschlafen</span>
         ${need ? `<span>Bedarf ${esc(Core.fmtDur(need))} · <b class="st-${needSt}">${esc(Core.fmtDelta('slp', d.slp - need))}</b></span>` : ''}
         ${fin(d.awakeN) || fin(d.awake) ? `<span>${fin(d.awakeN) ? `${nf0.format(d.awakeN)}× aufgewacht` : 'wach'}${fin(d.awake) ? ` · <b>${esc(Core.fmtDur(d.awake))}</b> wach` : ''}</span>` : ''}</div>
@@ -1267,7 +1388,7 @@ function openNight(date) {
       <div class="ph-sub">${avg != null ? `Dein Ø ${esc(Core.fmtDur(avg))}` : ''}${q ? `${avg != null ? ' · ' : ''}Garmin bewertet, wie oft Du aufwachst` : ''}</div>
     </div>`;
   }
-  h += `<div class="legend" style="margin-top:var(--sp-2)">${Object.keys(opt).length ? '<span><i class="l-opt"></i>Garmins Idealbereich</span>' : ''}<span><i class="l-mark"></i>Dein Schnitt (30 Nächte)</span></div></div>`;
+  h += `<div class="legend" style="margin-top:var(--s1)">${Object.keys(opt).length ? '<span><i class="l-opt"></i>Garmins Idealbereich</span>' : ''}<span><i class="l-mark"></i>Dein Schnitt (30 Nächte)</span></div></div>`;
 
   // Garmins übrige Teilbewertungen
   const rest = [
@@ -1346,7 +1467,7 @@ function openNight(date) {
 
   if (fin(d.nap)) h += `<div class="sec-h">Nickerchen</div><div class="card" id="nightNaps"><p class="note" style="margin:0">${esc(Core.fmtDur(d.nap))} am Tag</p></div>`;
 
-  h += `<div class="btn-row" style="margin-top:var(--sp-5)"><button class="btn" data-trend="${fin(d.slpScore) ? 'slpScore' : 'slp'}">Schlaf-Trends</button></div>`;
+  h += `<div class="btn-row" style="margin-top:var(--s3)"><button class="btn" data-trend="${fin(d.slpScore) ? 'slpScore' : 'slp'}">Schlaf-Trends</button></div>`;
 
   openSheet('Schlaf', h, null);
   $('#sheetBody').onclick = (e) => {
@@ -1484,7 +1605,7 @@ function nightCurvesHtml(date, n) {
     const first = `<span>eingeschlafen</span><b>${esc(Core.fmtClock(n.s0))}</b><span class="end">aufgewacht ${esc(Core.fmtClock(n.s0 + n.len))}</span>`;
     h += `<div class="card"><div class="card-h">Phasen</div>${chartBox(Charts.hypno(xs, segs, { fmtX: Core.fmtClock }), reader, first, 's')}</div>`;
   } else {
-    h += '<p class="note" style="margin:0 2px var(--sp-2)">Den Verlauf der Phasen über die Nacht gibt Garmins Personal API nicht heraus, nur die Summen oben.</p>';
+    h += '<p class="note" style="margin:0 2px var(--s1)">Den Verlauf der Phasen über die Nacht gibt Garmins Personal API nicht heraus, nur die Summen oben.</p>';
   }
   // Pulsspitzen (sleep.js) als Striche in der Pulskurve; Antippen nennt sie
   const ev = Sleep.nightEvents(n);
@@ -1567,30 +1688,55 @@ function nightPatternHtml(date, n, ev) {
     Tage wie im Fitness-Score. */
 const sparseDays = (key) => (key === 'vo2' ? 120 : 60);
 
-/** Kachel einer Kennzahl. Intensitätsminuten zählen als Woche gegen das
-    Wochenziel, Belastung als 7-Tage-Summe — so, wie man darüber nachdenkt. */
-function tile(key, date) {
+/** Kurze Labels für die Metrik-Karten, wo der Name aus Core zu lang ist. */
+const TILE_LABEL = { slpResp: 'Atmung (Nacht)' };
+
+/** Pill mit der Veränderung: Pfeil und Zahl. Mint, wenn es in die gute
+    Richtung geht, Koralle in die schlechte, grau ohne Richtung oder bei
+    weniger als einem Viertel Deiner üblichen Schwankung (Rauschen). */
+function deltaPill(key, v, prev, base, what) {
+  if (!fin(v) || !fin(prev)) return '';
+  const m = M[key] || {};
+  const d = v - prev;
+  const txt = Core.fmtDelta(key, d);
+  if (!txt) return '';
+  if (txt[0] === '±') return `<span class="pill st-off" aria-label="${esc('unverändert ' + what)}">±0</span>`;
+  const tiny = base && fin(base.sd) && Math.abs(d) < base.sd * 0.25;
+  const st = tiny || !m.dir ? 'off' : d * m.dir > 0 ? 'good' : 'bad';
+  // Ohne Einheit: Sie steht schon am Wert, die Pill bleibt so kurz
+  const bare = m.unit && txt.endsWith(' ' + m.unit) ? txt.slice(1, -m.unit.length - 1) : txt.slice(1);
+  return `<span class="pill st-${st}" aria-label="${esc(txt + ' ' + what)}">${d > 0 ? ICON.up : ICON.down}${esc(bare)}</span>`;
+}
+
+/** Metrik-Karte: Label, Wert mit der Veränderung zum Vortag als Pill, die
+    letzten sieben Tage als Sparkline mit Deinem Normalbereich als Band; der
+    letzte Punkt in der Farbe seines Zustands. Intensitätsminuten zählen als
+    Woche gegen das Wochenziel, Belastung als 7-Tage-Summe — so, wie man
+    darüber nachdenkt. Seltene Werte (Gewicht, VO2max) vergleichen mit der
+    Messung davor und zeigen ein längeres Fenster. */
+function tile(key, date, wide) {
   const m = M[key];
   const t = Core.today();
+  const sw = wide ? 252 : 92;               // Breite der Sparkline neben der Pill, in px der Karte
   if (key === 'im') {
     const ws = Core.weekStart(date);
     const vals = Core.dateRange(ws, date).map((x) => Core.value(db, idx, 'im', x)).filter(fin);
-    const tot = vals.reduce((s, v) => s + v, 0);
+    const tot = Math.round(vals.reduce((s, v) => s + v, 0));
     const goal = (db.days[date] || {}).imGoal || 150;
     const pct = Math.min(100, (tot / goal) * 100);
-    return `<button class="tile" data-trend="im"><span class="tile-l">Intensitätsminuten</span>
-      <span class="tile-v">${nf0.format(tot)}<small>/ ${nf0.format(goal)}</small></span>
-      <span class="tile-d st-${tot >= goal ? 'good' : 'ok'}">${tot >= goal ? 'Wochenziel erreicht' : `diese Woche · noch ${nf0.format(goal - tot)}`}</span>
-      <div class="meter"><i class="${tot >= goal ? 'full' : ''}" style="width:${pct}%"></i></div></button>`;
+    return `<button class="mcard" data-trend="im"><span class="lbl">Intensität · Woche</span>
+      <span class="mval"><span class="num">${countSpan(nf0.format(tot), tot)}<small>/ ${nf0.format(goal)} min</small></span></span>
+      <div class="meter"><i class="${tot >= goal ? 'full' : ''}" style="width:${pct}%"></i></div>
+      <span class="sub">${tot >= goal ? 'Wochenziel erreicht' : `noch ${nf0.format(goal - tot)} min bis zum Ziel`}</span></button>`;
   }
   if (key === 'load') {
     const ls = Core.loadStatus(db, idx, date);
-    const vals = Core.loadSeries(db, idx, Core.addDays(date, -13), date).map((r) => r.acute);
+    const vals = Core.loadSeries(db, idx, Core.addDays(date, -6), date).map((r) => r.acute);
     const st = ls ? { low: 'ok', ok: 'good', high: 'warn', spike: 'bad' }[ls.status] : 'off';
-    return `<button class="tile" data-nav="training"><span class="tile-l">Belastung · 7 Tage</span>
-      <span class="tile-v">${ls ? nf0.format(ls.acute) : '–'}</span>
-      <span class="tile-d st-${st}">${ls ? esc(ls.text) : 'braucht 3 Wochen Daten'}</span>
-      ${Charts.spark(vals, { band: ls ? [ls.chronic * 0.8, ls.chronic * 1.3] : null })}</button>`;
+    return `<button class="mcard" data-nav="training"><span class="lbl">Belastung · 7 Tage</span>
+      <span class="mval"><span class="num">${ls ? countSpan(nf0.format(ls.acute), Math.round(ls.acute)) : '–'}</span></span>
+      <div class="mtrend">${Charts.spark(vals, { band: ls ? [ls.chronic * 0.8, ls.chronic * 1.3] : null, st, w: wide ? 311 : 136 })}</div>
+      <span class="sub">${ls ? `<b class="st-${st}">${esc(ls.short)}</b> · üblich ${nf0.format(ls.chronic)}` : 'braucht 3 Wochen Daten'}</span></button>`;
   }
   // Seltene Werte (Gewicht, VO2max): der letzte bekannte zählt
   const look = sparseDays(key);
@@ -1599,30 +1745,31 @@ function tile(key, date) {
     for (let i = 1; i <= look && !fin(v); i++) { vDate = Core.addDays(date, -i); v = Core.value(db, idx, key, vDate); }
   }
   const base = Core.baseline(db, idx, key, date, m.sparse ? 90 : 30, m.sparse ? 3 : 10);
+  // Was sich über den Tag erst ansammelt, ist heute noch nicht fertig: kein Urteil, kein Vergleich
   const partial = date === t && ACCUM.includes(key);
   const st = partial ? null : Core.judge(v, base, m.dir);
-  let delta = '';
-  if (partial) delta = 'bisher heute';
-  else if (fin(v) && base) delta = `${Core.fmtDelta(key, v - base.mean)} zu Ø`;
-  else if (fin(v)) delta = 'Normalbereich folgt';
-  if (m.sparse && vDate !== date && fin(v)) delta = dayLabel(vDate);
-  const vals = Core.series(db, idx, key, Core.addDays(date, m.sparse ? 1 - look : -13), date);
+  let prev = null;
+  if (m.sparse) {
+    for (let i = 1; i <= look && prev == null; i++) { const x = Core.value(db, idx, key, Core.addDays(vDate, -i)); if (fin(x)) prev = x; }
+  } else prev = Core.value(db, idx, key, Core.addDays(date, -1));
+  const pill = partial ? '' : deltaPill(key, v, prev, base, m.sparse ? 'zur Messung davor' : 'zum Vortag');
+  // Seltene Werte: die letzten zwölf Messungen, sonst wird die kleine Linie zum Rauschen
+  const vals = m.sparse
+    ? Core.series(db, idx, key, Core.addDays(date, 1 - look), date).filter(fin).slice(-12)
+    : Core.series(db, idx, key, Core.addDays(date, -6), date);
+  let extra = '';
+  if (m.sparse && fin(v)) extra = `<span class="sub">${esc(vDate === date ? 'heute gemessen' : vDate === Core.addDays(t, -1) ? 'gestern gemessen' : 'zuletzt ' + dfShort.format(pdate(vDate)))}</span>`;
+  if (partial && fin(v)) extra = '<span class="sub">bis jetzt</span>';
   if (key === 'steps' && fin(v)) {
     const goal = (db.days[date] || {}).stepGoal;
-    if (goal) {
-      return `<button class="tile" data-trend="steps"><span class="tile-l">Schritte</span>
-        <span class="tile-v">${valHtml(key, v)}</span>
-        <span class="tile-d st-${v >= goal ? 'good' : st || 'ok'}">${v >= goal ? 'Ziel erreicht' : esc(delta)}</span>
-        <div class="meter"><i class="${v >= goal ? 'full' : ''}" style="width:${Math.min(100, (v / goal) * 100)}%"></i></div>
-        ${Charts.spark(vals, { band: base ? [base.lo, base.hi] : null })}</button>`;
-    }
+    if (goal) extra = `<div class="meter"><i class="${v >= goal ? 'full' : ''}" style="width:${Math.min(100, (v / goal) * 100)}%"></i></div><span class="sub">${partial ? 'bis jetzt · ' : ''}${v >= goal ? 'Tagesziel erreicht' : `Ziel ${nf0.format(goal)}`}</span>`;
   }
   // Den VO2max-Trend gibt es erst ab zwei Werten, davor zeigt Training den einen
   const attr = key === 'vo2' && Object.keys(idx.vo2).length < 2 ? 'data-nav="training"' : `data-trend="${key}"`;
-  return `<button class="tile" ${attr}><span class="tile-l">${esc(m.label)}${m.sparse ? ` · ${look} Tage` : ''}</span>
-    <span class="tile-v">${valHtml(key, v)}</span>
-    <span class="tile-d st-${st || 'off'}">${esc(delta)}</span>
-    ${Charts.spark(vals, { band: base && !m.sparse ? [base.lo, base.hi] : null, connect: m.sparse })}</button>`;
+  return `<button class="mcard" ${attr}><span class="lbl">${esc(TILE_LABEL[key] || m.label)}</span>
+    <span class="mval"><span class="num">${numHtml(key, v)}</span></span>
+    <div class="mtrend">${Charts.spark(vals, { band: base && !m.sparse ? [base.lo, base.hi] : null, connect: m.sparse, st: st || 'off', partial, w: pill ? sw : sw + 52 })}${pill}</div>
+    ${extra}</button>`;
 }
 
 /** Die letzten sieben Tage als Tabelle — jede Zelle in der Farbe ihrer
@@ -1667,7 +1814,10 @@ function actRow(a) {
 
 /* ── 8. Trends ──────────────────────────────────────────────── */
 
-const RANGES = [[28, '4 W'], [91, '3 M'], [365, '1 J'], [0, 'Alles']];
+/* Zeitraum der Detailansicht: kurz für den Blick auf die letzten Tage, lang
+   für die Trends über Monate und Jahre, um die es der App geht. */
+const RANGES = [[7, 'Woche'], [30, 'Monat'], [91, '3 Mon.'], [365, 'Jahr'], [0, 'Alles']];
+const RANGE_WORD = { 7: ['letzte 7 Tage', 'der Woche davor'], 30: ['letzte 30 Tage', 'den 30 Tagen davor'], 91: ['letzte 3 Monate', 'den 3 Monaten davor'], 365: ['letzte 12 Monate', 'dem Jahr davor'] };
 
 function firstDate() {
   const ks = Object.keys(db.days);
@@ -1690,6 +1840,46 @@ function availableMetrics() {
     if (days.some((d) => fin(d[k]))) out.add(k);
   }
   return out;
+}
+
+/** Kurze Einordnung unter dem Diagramm, in ganzen Sätzen: Niveau gegen den
+    Zeitraum davor (und ob das besser ist), bei langen Zeiträumen die
+    Tendenz, und wie viele Tage in Deinem Normalbereich lagen. */
+function trendText(key, ps, o) {
+  const m = M[key] || {};
+  const isSum = m.agg === 'sum';
+  const b = (v) => `<b>${esc(Core.fmt(key, v))}</b>`;
+  const out = [];
+  let lead = isSum ? `Im Schnitt ${b(ps.avg)} pro Tag` : `Im Schnitt ${b(ps.avg)}`;
+  if (fin(ps.prevAvg) && o.prevLbl) {
+    const d = ps.avg - ps.prevAvg;
+    const txt = Core.fmtDelta(key, d);
+    if (!txt || txt[0] === '±') lead += `, genauso viel wie in ${o.prevLbl}`;
+    else {
+      const more = m.fmt === 'clock' ? (d > 0 ? 'später' : 'früher') : (d > 0 ? 'mehr' : 'weniger');
+      const judge = !m.dir ? '' : d * m.dir > 0 ? ', also besser' : ', also schlechter';
+      lead += `, ${esc(txt.slice(1))} ${more} als in ${o.prevLbl}${judge}`;
+    }
+  }
+  out.push(lead + '.');
+  if (o.long && fin(ps.perMonth)) {
+    const txt = Core.fmtDelta(key, ps.perMonth);
+    out.push(!txt || txt[0] === '±' ? 'Über den Zeitraum ohne klare Tendenz.' : `Tendenz: ${esc(txt)} pro Monat.`);
+  }
+  if (o.lo && o.hi) {
+    let n = 0, inside = 0, below = 0;
+    o.vals.forEach((v, i) => {
+      if (!fin(v) || !fin(o.lo[i]) || !fin(o.hi[i])) return;
+      n++;
+      if (v < o.lo[i]) below++; else if (v <= o.hi[i]) inside++;
+    });
+    if (n >= 5) {
+      const above = n - inside - below;
+      const off = m.dir ? (m.dir > 0 ? below : above) : 0;
+      out.push(`${nf0.format(inside)} von ${nf0.format(n)} Tagen lagen in Deinem Normalbereich${off ? `, ${nf0.format(off)} ${m.dir > 0 ? 'darunter' : 'darüber'}` : ''}.`);
+    }
+  }
+  return out.join(' ');
 }
 
 function renderTrends() {
@@ -1719,38 +1909,37 @@ function renderTrends() {
     h += `<span class="chip-sep">${esc(g)}</span>` + ks.map((k) => `<button class="chip${k === trendKey ? ' on' : ''}" data-set="trendKey:${k}">${esc(M[k].label)}</button>`).join('');
   }
   h += '</div>';
-  h += `<div class="seg top">${RANGES.map(([r, l]) => `<button class="${r === trendRange ? 'on' : ''}" data-set="trendRange:${r}">${l}</button>`).join('')}</div>`;
+  h += `<div class="seg top" role="tablist" aria-label="Zeitraum">${RANGES.map(([r, l]) => `<button role="tab" aria-selected="${r === trendRange}" class="${r === trendRange ? 'on' : ''}" data-set="trendRange:${r}">${l}</button>`).join('')}</div>`;
   // Achsenstriche bei vollen Stunden bzw. Uhrzeiten statt bei krummen Sekundenwerten
   const unit = m.fmt === 'dur' ? 3600 : (m.fmt === 'min' || m.fmt === 'clock') ? 60 : 1;
 
   const ps = Core.periodStats(db, idx, trendKey, from, t);
   // Schlafsaldo: die Nulllinie heißt „Bedarf gedeckt"
   const goal = trendKey === 'steps' ? (db.days[t] || db.days[Core.addDays(t, -1)] || {}).stepGoal : trendKey === 'debt' ? 0 : null;
+  const week = dates.length <= 10;
   const reader = (i) => {
     const v = vals[i];
     return `<span>${esc(dayLabel(dates[i]))}</span><b>${esc(Core.fmt(trendKey, v))}</b>`
-      + (fin(avg[i]) ? `<span class="end">Ø${m.sparse ? '' : ' 7 T'} ${esc(Core.fmt(trendKey, avg[i]))}</span>` : '');
+      + (fin(avg[i]) && !week ? `<span class="end">Ø${m.sparse ? '' : ' 7 T'} ${esc(Core.fmt(trendKey, avg[i]))}</span>` : '');
   };
   let last = vals.length - 1;
   while (last > 0 && !fin(vals[last])) last--;
 
+  const [rangeLbl, prevLbl] = RANGE_WORD[trendRange] || [`seit ${dfDate.format(pdate(from))}`, ''];
   h += '<div class="card">';
   if (ps) {
+    // Veränderung des Tagesmittels gegen den gleich langen Zeitraum davor
     const delta = fin(ps.prevAvg) ? ps.avg - ps.prevAvg : null;
-    const better = delta == null || !m.dir ? 'ok' : delta * m.dir > 0 ? 'good' : 'warn';
-    const shownDelta = delta == null ? '' : Core.fmtDelta(trendKey, delta);
-    h += `<div class="big-stat"><span class="num">${valHtml(trendKey, isSum ? ps.total : ps.avg)}</span>
-      <span class="muted">${isSum ? 'gesamt' : 'Ø'} im Zeitraum</span></div>
-      <div class="stat-row">
-        <div class="stat"><span class="stat-l">zum Vorzeitraum</span><span class="stat-v st-${shownDelta.startsWith('±') ? 'ok' : better}">${delta == null ? '–' : esc(shownDelta)}</span></div>
-        <div class="stat"><span class="stat-l">Trend pro Monat</span><span class="stat-v">${fin(ps.perMonth) ? esc(Core.fmtDelta(trendKey, ps.perMonth)) : '–'}</span></div>
-        <div class="stat"><span class="stat-l">${isSum ? 'Ø pro Tag' : 'Spanne'}</span><span class="stat-v">${isSum ? esc(Core.fmt(trendKey, ps.avg)) : esc(splitVal(trendKey, ps.min)[0] + '–' + splitVal(trendKey, ps.max)[0])}</span></div>
-      </div>`;
+    const base = band ? { sd: Core.sd(vals.filter(fin)) } : null;
+    h += `<div class="tr-head"><span class="lbl">${esc(m.label)} · ${isSum ? 'Summe' : 'Ø'} ${esc(rangeLbl)}</span>
+      <div class="tr-big"><span class="num">${numHtml(trendKey, isSum ? ps.total : ps.avg)}</span>${delta != null ? deltaPill(trendKey, ps.avg, ps.prevAvg, base, 'zum Zeitraum davor') : ''}</div></div>`;
   }
   const svg = Charts.trend({ dates, vals, avg, lo, hi, goal, unit, bars: isSum && dates.length <= 120, zero: isSum, fmtY: (v) => Core.fmt(trendKey, v, true) });
-  h += `<div style="margin-top:var(--sp-3)">${chartBox(svg, reader, last >= 0 && fin(vals[last]) ? reader(last) : '')}</div>`;
-  h += `<div class="legend"><span><i class="l-pt"></i>Tag</span><span><i class="l-avg"></i>${m.sparse ? 'Mittel 4 Wochen' : 'Mittel 7 Tage'}</span>${band ? '<span><i class="l-band"></i>Dein Normalbereich</span>' : ''}${goal != null ? `<span><i class="l-goal"></i>${trendKey === 'debt' ? 'Bedarf gedeckt' : 'Ziel'}</span>` : ''}</div>`;
-  if (m.hint || band) h += `<p class="note">${m.hint ? esc(m.hint) + '. ' : ''}${band ? 'Der Normalbereich ist Dein Mittel ± eine Standardabweichung über die 30 Tage davor — etwa zwei von drei Tagen liegen darin.' : ''}</p>`;
+  h += `<div class="tr-chart">${chartBox(svg, reader, last >= 0 && fin(vals[last]) ? reader(last) : '')}</div>`;
+  const lineLbl = week && !(isSum && dates.length <= 120) ? 'Tageswert' : m.sparse ? 'Mittel 4 Wochen' : 'Mittel 7 Tage';
+  h += `<div class="legend">${week && !isSum ? '' : '<span><i class="l-pt"></i>Tag</span>'}<span><i class="l-avg"></i>${lineLbl}</span>${band ? '<span><i class="l-band"></i>Dein Normalbereich</span>' : ''}${goal != null ? `<span><i class="l-goal"></i>${trendKey === 'debt' ? 'Bedarf gedeckt' : 'Ziel'}</span>` : ''}</div>`;
+  if (ps) h += `<p class="tr-text">${trendText(trendKey, ps, { vals, lo, hi, prevLbl, long: dates.length >= 60 })}</p>`;
+  if (m.hint || band) h += `<p class="note">${m.hint ? esc(m.hint) + '. ' : ''}${band ? 'Der Normalbereich ist Dein Mittel ± eine Standardabweichung über die 30 Tage davor; etwa zwei von drei Tagen liegen darin.' : ''}</p>`;
   h += '</div>';
 
   if (m.group === 'Schlaf') h += phaseBars(from, t);
@@ -1869,14 +2058,18 @@ function renderTraining() {
     : trainPeriod === 'month' ? Core.isoDate(new Date(pdate(pf).getFullYear(), pdate(pf).getMonth() - 1, 1, 12))
       : Core.isoDate(new Date(pdate(pf).getFullYear() - 1, 0, 1, 12));
   const prev = sumActs(prevStart, Core.addDays(prevStart, len));
-  const cmp = (a, b, f) => (b ? `<span class="stat-d st-${a >= b ? 'good' : 'ok'}">${a >= b ? '+' : '−'}${esc(f(Math.abs(a - b)))}</span>` : '<span class="stat-d st-off">–</span>');
+  // Mehr als im gleichen Abschnitt davor in Mint, weniger neutral: weniger Training ist kein Fehler
+  const cmp = (a, b, f) => (b || a
+    ? (a === b ? '<span class="pill st-off">±0</span>'
+      : `<span class="pill st-${a > b ? 'good' : 'off'}">${a > b ? ICON.up : ICON.down}${esc(f(Math.abs(a - b)))}</span>`)
+    : '');
 
   let h = `<div class="seg top">${PERIODS.map(([p, l]) => `<button class="${p === trainPeriod ? 'on' : ''}" data-set="trainPeriod:${p}">${l}</button>`).join('')}</div>`;
   h += `<div class="card"><div class="stat-row">
-    <div class="stat"><span class="stat-l">Einheiten</span><span class="stat-v">${nf0.format(cur.n)}</span>${cmp(cur.n, prev.n, nf0.format)}</div>
+    <div class="stat"><span class="stat-l">Einheiten</span><span class="stat-v">${countSpan(nf0.format(cur.n), cur.n)}</span>${cmp(cur.n, prev.n, nf0.format)}</div>
     <div class="stat"><span class="stat-l">Zeit</span><span class="stat-v">${esc(Core.fmtDur(cur.dur))}</span>${cmp(cur.dur, prev.dur, Core.fmtDur)}</div>
     <div class="stat"><span class="stat-l">Distanz</span><span class="stat-v">${esc(km(cur.dist))}</span>${cmp(cur.dist, prev.dist, km)}</div>
-  </div><p class="note">Vergleich mit dem gleichen Abschnitt ${trainPeriod === 'week' ? 'der Vorwoche' : trainPeriod === 'month' ? 'des Vormonats' : 'des Vorjahrs'}.</p></div>`;
+  </div><p class="note">Gegen den gleichen Abschnitt ${trainPeriod === 'week' ? 'der Vorwoche' : trainPeriod === 'month' ? 'des Vormonats' : 'des Vorjahrs'}.</p></div>`;
 
   // Umfang je Woche, nach Sportart gestapelt
   const weeks = Core.trainingWeeks(db, idx, t, trainPeriod === 'year' ? 52 : 12);
@@ -1920,8 +2113,10 @@ function renderTraining() {
     const rl = (i) => `<span>${esc(dayLabel(rows[i].date))}</span><b>${nf0.format(rows[i].acute)}</b><span class="end">üblich ${nf0.format(rows[i].chronic)} · ${rows[i].chronic ? nf1.format(rows[i].acute / rows[i].chronic) + '×' : '–'}</span>`;
     const stc = ls ? { low: 'ok', ok: 'good', high: 'warn', spike: 'bad' }[ls.status] : 'off';
     h += `<div class="sec-h">Belastung<span class="muted">letzte 90 Tage</span></div><div class="card">
-      ${ls ? `<div class="big-stat"><span class="num st-${stc}">${nf1.format(ls.ratio)}×</span><span class="muted">${esc(ls.text)} · 7 Tage ${nf0.format(ls.acute)} gegen üblich ${nf0.format(ls.chronic)}</span></div>` : ''}
-      <div style="margin-top:var(--sp-2)">${chartBox(Charts.load(rows), rl, rl(rows.length - 1))}</div>
+      ${ls ? `<div class="tr-head"><span class="lbl">7 Tage gegen üblich</span>
+        <div class="tr-big"><span class="num">${countSpan(nf1.format(ls.ratio), Math.round(ls.ratio * 10) / 10, 1)}<small>×</small></span><span class="pill st-${stc}">${esc(ls.short)}</span></div>
+        <span class="note" style="margin:0">${nf0.format(ls.acute)} in den letzten 7 Tagen, üblich sind ${nf0.format(ls.chronic)}</span></div>` : ''}
+      <div class="tr-chart">${chartBox(Charts.load(rows), rl, rl(rows.length - 1))}</div>
       <div class="legend"><span><i class="l-acute"></i>letzte 7 Tage</span><span><i class="l-chronic"></i>üblich (Wochenmittel aus 4 Wochen)</span><span><i class="l-ok"></i>gut verträglich</span></div>
       <p class="note">Belastung ist Garmins Trainingslast je Einheit (ohne Wert: aus Dauer und Puls geschätzt). Bis etwa 1,3× des Üblichen gilt als gut verträglich, ab 1,5× steigt das Verletzungsrisiko.</p></div>`;
   }
@@ -1932,12 +2127,15 @@ function renderTraining() {
     const from = maxDate(vo2d[0], Core.addDays(t, -364));
     const dates = Core.dateRange(from, t);
     const vals = dates.map((d) => (fin(idx.vo2[d]) ? idx.vo2[d] : null));
-    let lastV = null; const step = vals.map((v) => { if (fin(v)) lastV = v; return lastV; });
-    const rv2 = (i) => `<span>${esc(dayLabel(dates[i]))}</span><b>${fin(step[i]) ? nf0.format(step[i]) : '–'}</b>`;
+    // Garmins Schätzung springt von Lauf zu Lauf um einen Punkt: als Linie das Mittel über 30 Tage
+    const smooth = Core.rolling(vals, 30, 1);
+    const rv2 = (i) => `<span>${esc(dayLabel(dates[i]))}</span><b>${fin(vals[i]) ? nf0.format(vals[i]) : '–'}</b>${fin(smooth[i]) ? `<span class="end">Ø 30 T ${nf1.format(smooth[i])}</span>` : ''}`;
     const latest = idx.vo2[vo2d[vo2d.length - 1]];
     h += `<div class="sec-h">VO2max<span class="muted">aus Läufen und Fahrten</span></div><div class="card">
-      <div class="big-stat"><span class="num">${nf0.format(latest)}</span><span class="muted">zuletzt am ${esc(dfDate.format(pdate(vo2d[vo2d.length - 1])))}</span></div>
-      ${chartBox(Charts.trend({ dates, vals, avg: step, h: 140, fmtY: (v) => nf0.format(v) }), rv2, '')}</div>`;
+      <div class="tr-head"><span class="lbl">Zuletzt · ${esc(dfDate.format(pdate(vo2d[vo2d.length - 1])))}</span>
+        <div class="tr-big"><span class="num">${countSpan(nf0.format(latest), latest)}</span></div></div>
+      <div class="tr-chart">${chartBox(Charts.trend({ dates, vals, avg: smooth, h: 150, fmtY: (v) => nf0.format(v) }), rv2, '')}</div>
+      <div class="legend"><span><i class="l-pt"></i>Messung</span><span><i class="l-avg"></i>Mittel 30 Tage</span></div></div>`;
   }
 
   // Bestzeiten
@@ -1974,7 +2172,7 @@ function renderTraining() {
     h += actRow(a);
   }
   h += '</div>';
-  if (list.length > trainShow) h += `<div class="btn-row" style="margin-top:var(--sp-3)"><button class="btn" data-action="more">Weitere ${nf0.format(Math.min(30, list.length - trainShow))} zeigen</button></div>`;
+  if (list.length > trainShow) h += `<div class="btn-row" style="margin-top:var(--s2)"><button class="btn" data-action="more">Weitere ${nf0.format(Math.min(30, list.length - trainShow))} zeigen</button></div>`;
   el.innerHTML = h;
 }
 
@@ -2000,7 +2198,7 @@ function openActivity(id, back) {
     [a.vo2 ? nf0.format(a.vo2) : null, 'VO2max'],
     [fin(a.bb) ? (a.bb > 0 ? '+' : '') + nf0.format(a.bb) : null, 'Body Battery'],
   ].filter((f) => f[0] && f[0] !== '–');
-  let h = `<p class="note" style="margin:0 0 var(--sp-3)">${esc(dfLong.format(pdate(a.date)))} · ${esc(a.start.slice(11, 16))} · ${esc(Core.typeLabel(a.type))}${a.loc ? ' · ' + esc(a.loc) : ''}${a.pr ? ' · Bestleistung' : ''}</p>`;
+  let h = `<p class="note" style="margin:0 0 var(--s2)">${esc(dfLong.format(pdate(a.date)))} · ${esc(a.start.slice(11, 16))} · ${esc(Core.typeLabel(a.type))}${a.loc ? ' · ' + esc(a.loc) : ''}${a.pr ? ' · Bestleistung' : ''}</p>`;
   h += `<div class="facts">${facts.map(([v, l]) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>`;
   if (a.z) {
     const tot = a.z.reduce((s, v) => s + v, 0) || 1;
@@ -2052,14 +2250,14 @@ function streamsHtml(a, st) {
     const by = trackBy === 'spd' && st.spd ? 'spd' : st.hr ? 'hr' : st.spd ? 'spd' : null;
     h += `<div id="trackBox">${Charts.track(st.track, by ? st[by] : null)}</div>`;
     if (st.hr && st.spd) h += `<div class="seg top"><button class="${by === 'hr' ? 'on' : ''}" data-track="hr">Farbe: Puls</button><button class="${by === 'spd' ? 'on' : ''}" data-track="spd">Farbe: ${usesPace(a.type) ? 'Tempo' : 'Geschwindigkeit'}</button></div>`;
-    h += '<div class="legend" style="margin-bottom:var(--sp-3)"><span><i class="lz1"></i>niedrig</span><span><i class="lz3"></i>mittel</span><span><i class="lz5"></i>hoch</span><span>· grün Start, rot Ziel</span></div>';
+    h += '<div class="legend" style="margin-bottom:var(--s2)"><span><i class="lz1"></i>niedrig</span><span><i class="lz3"></i>mittel</span><span><i class="lz5"></i>hoch</span><span><i class="l-start"></i>Start</span><span><i class="l-end"></i>Ziel</span></div>';
   }
   const curve = (key, label, fmtY, cls, opt) => {
     if (!st[key]) return '';
     const reader = (i) => `<span>${esc(xs[i] != null ? hms(xs[i]) : '')}</span><b>${esc(fin(st[key][i]) ? fmtY(st[key][i]) : '–')}</b><span class="end">${st.dist && fin(st.dist[i]) ? esc(km(st.dist[i])) : ''}</span>`;
     const good = st[key].filter(fin);
     const first = good.length ? `<span>Ø</span><b>${esc(fmtY(Core.mean(good)))}</b><span class="end">max. ${esc(fmtY(Math.max(...good)))}</span>` : '';
-    return `<div class="card" style="margin-top:var(--sp-2)"><div class="card-h">${esc(label)}</div>${chartBox(Charts.curve(xs, st[key], Object.assign({ fmtY, fmtX: xFmt, cls, fill: true }, opt || {})), reader, first, 's')}</div>`;
+    return `<div class="card" style="margin-top:var(--s1)"><div class="card-h">${esc(label)}</div>${chartBox(Charts.curve(xs, st[key], Object.assign({ fmtY, fmtX: xFmt, cls, fill: true }, opt || {})), reader, first, 's')}</div>`;
   };
   h += curve('hr', 'Puls', (v) => nf0.format(v), 'c-hr');
   if (st.spd) {
@@ -2067,7 +2265,7 @@ function streamsHtml(a, st) {
     // Tempo als min/km: Stillstand (unter 1 km/h) würde die Skala sprengen
     const vals = pace ? st.spd.map((v) => (fin(v) && v > 0.28 ? 1000 / v : null)) : st.spd.map((v) => (fin(v) ? v * 3.6 : null));
     const reader = (i) => `<span>${esc(hms(xs[i]))}</span><b>${esc(fin(vals[i]) ? (pace ? hms(vals[i]) + ' /km' : nf1.format(vals[i]) + ' km/h') : '–')}</b>`;
-    h += `<div class="card" style="margin-top:var(--sp-2)"><div class="card-h">${pace ? 'Tempo' : 'Geschwindigkeit'}</div>${chartBox(Charts.curve(xs, vals, { fmtY: pace ? (v) => hms(v) : (v) => nf0.format(v), fmtX: xFmt, invert: pace, fill: !pace }), reader, '', 's')}</div>`;
+    h += `<div class="card" style="margin-top:var(--s1)"><div class="card-h">${pace ? 'Tempo' : 'Geschwindigkeit'}</div>${chartBox(Charts.curve(xs, vals, { fmtY: pace ? (v) => hms(v) : (v) => nf0.format(v), fmtX: xFmt, invert: pace, fill: !pace }), reader, '', 's')}</div>`;
   }
   h += curve('alt', 'Höhe', (v) => nf0.format(v) + ' m', 'c-alt');
   h += curve('cad', 'Kadenz', (v) => nf0.format(v));
@@ -2119,7 +2317,7 @@ function renderPatterns() {
   const res = Core.insights(db, idx, from, t);
   const ok = res.filter((r) => r.enough).sort((a, b) => (b.solid - a.solid) || (Math.abs(b.r) - Math.abs(a.r)));
   const few = res.filter((r) => !r.enough);
-  h += '<p class="note" style="margin:0 2px var(--sp-3)">Was hängt bei Dir womit zusammen? Die Tage werden nach der Ursache gedrittelt; verglichen wird das obere mit dem unteren Drittel. Oben steht, was am deutlichsten ist.</p>';
+  h += '<p class="note" style="margin:0 2px var(--s2)">Was hängt bei Dir womit zusammen? Die Tage werden nach der Ursache gedrittelt; verglichen wird das obere mit dem unteren Drittel. Oben steht, was am deutlichsten ist.</p>';
   if (!ok.length) h += '<div class="empty"><h2>Noch zu wenig Tage</h2><p>Jede Auswertung braucht mindestens 20 Tage mit beiden Werten. Ein längerer Zeitraum oder mehr Verlauf hilft.</p></div>';
 
   for (const r of ok) {
@@ -2195,7 +2393,7 @@ function pfDelta(f, d) {
 
 function sleepPatternsHtml(from, t) {
   const tgs = Sleep.targets(db, idx, from, t);
-  let h = '<p class="note" style="margin:0 2px var(--sp-3)">Was Deine Nächte prägt: worin sich unruhige von ruhigen Nächten unterscheiden, wovon Tief- und REM-Schlaf abhängen und wann in der Nacht die Unruhe kommt.</p>';
+  let h = '<p class="note" style="margin:0 2px var(--s2)">Was Deine Nächte prägt: worin sich unruhige von ruhigen Nächten unterscheiden, wovon Tief- und REM-Schlaf abhängen und wann in der Nacht die Unruhe kommt.</p>';
   if (!tgs.length) {
     h += `<div class="empty"><h2>Noch zu wenig Nächte</h2><p>Der Vergleich der Nächte braucht mindestens ${Sleep.MIN_NIGHTS} im Zeitraum. Ein längerer Zeitraum oder mehr Verlauf hilft.</p></div>`;
   } else {
@@ -2277,7 +2475,7 @@ function phasesHtml(from, t) {
       h += `<div class="rg-row"><div class="rg-h"><b>${PHASE_LABEL[k]}</b><span class="muted">${nf0.format(c.opt[0])}–${nf0.format(c.opt[1])} %</span><span class="rg-v">${nf0.format(w(c.in))} % der Nächte</span></div>
         <div class="rg">${['lo', 'in', 'hi'].map((z) => (c[z] ? `<i class="rg-${z}" style="width:${w(c[z])}%"></i>` : '')).join('')}</div></div>`;
     }
-    h += '<div class="legend" style="margin-top:var(--sp-2)"><span><i class="rg-lo"></i>darunter</span><span><i class="rg-in"></i>im Bereich</span><span><i class="rg-hi"></i>darüber</span></div>';
+    h += '<div class="legend" style="margin-top:var(--s1)"><span><i class="rg-lo"></i>darunter</span><span><i class="rg-in"></i>im Bereich</span><span><i class="rg-hi"></i>darüber</span></div>';
     const short = ['deep', 'rem'].filter((k) => id[k]).sort((a, b) => id[b].lo / id[b].n - id[a].lo / id[a].n)[0];
     if (short && id[short].lo / id[short].n >= 0.4) {
       h += `<p class="note">${PHASE_LABEL[short]} liegt in ${pctTxt(id[short].lo / id[short].n)} der Nächte unter Garmins Bereich. Wovon das bei Dir abhängt, zeigt oben der Vergleich „${short === 'deep' ? 'Tiefschlaf' : 'REM-Schlaf'}“.</p>`;
@@ -2303,7 +2501,7 @@ function unrestHtml(from, t) {
       <p class="note">Anteil der Nächte nach Zahl der Aufwacher. In ${pctTxt(often)} der Nächte bist Du dreimal oder öfter aufgewacht.</p>`;
     const s = u.streak;
     if (s) {
-      h += `<div class="ins-h" style="margin-top:var(--sp-3)"><span class="badge ${s.solid ? 'deutlich' : ''}">${s.solid ? (s.pA > s.pB ? 'kommen gehäuft' : 'folgen selten aufeinander') : 'eher Zufall'}</span></div>
+      h += `<div class="ins-h" style="margin-top:var(--s2)"><span class="badge ${s.solid ? 'deutlich' : ''}">${s.solid ? (s.pA > s.pB ? 'kommen gehäuft' : 'folgen selten aufeinander') : 'eher Zufall'}</span></div>
         <div class="ins-t">Nach einer unruhigen Nacht (ab ${esc(Core.fmt('awakeN', s.cut))} aufgewacht) war die nächste in ${pctTxt(s.pA)} der Fälle wieder unruhig, nach anderen Nächten in ${pctTxt(s.pB)}.</div>`;
       if (s.solid && s.pA > s.pB) h += '<p class="note">Unruhige Nächte kommen bei Dir in Serien. Oft steckt dann eine Phase dahinter — Stress, ein Infekt, viel Training — und nicht die einzelne Nacht.</p>';
     }
@@ -2403,7 +2601,7 @@ function openSettings() {
 
   openSheet('Einstellungen', `
     <div class="sec-h">Verbindung</div>
-    ${db.sync.error ? `<div class="hint err" style="margin:0 0 var(--sp-3)">${ICON.warn}<div class="grow"><strong>Letzter Abgleich fehlgeschlagen</strong><span>${esc(db.sync.error)}</span></div></div>` : ''}
+    ${db.sync.error ? `<div class="hint err" style="margin:0 0 var(--s2)">${ICON.warn}<div class="grow"><strong>Letzter Abgleich fehlgeschlagen</strong><span>${esc(db.sync.error)}</span></div></div>` : ''}
     <label>Proxy-Adresse
       <input id="setProxy" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://garmin-proxy.….workers.dev" value="${esc(db.settings.proxy)}">
       <span class="field-note">Dein Cloudflare Worker. <button class="link" style="min-height:0;padding:0" data-action="proxyGuide">Wie richte ich ihn ein?</button></span>
@@ -2429,7 +2627,7 @@ function openSettings() {
       ${pending.length ? `<div class="row"><span class="grow"><span class="t">Verlauf wird nachgeprüft</span><span class="sub">${esc(pending.map((k) => srcName[k]).join(', '))} · beim nächsten Abgleich</span></span></div>` : ''}
       ${gapRows}
     </div>
-    <div class="btn-row" style="margin-top:var(--sp-3)">
+    <div class="btn-row" style="margin-top:var(--s2)">
       <button class="btn" id="btnSyncNow">Jetzt abgleichen</button>
       <button class="btn" id="btnReload">Alles neu laden</button>
     </div>
@@ -2438,7 +2636,7 @@ function openSettings() {
     <div class="seg" id="setTheme">${Object.entries(THEMES).map(([k, v]) => `<button data-v="${k}" class="${db.theme === k ? 'on' : ''}">${v.label}</button>`).join('')}</div>
 
     <div class="sec-h">Sicherung</div>
-    <p class="note" style="margin:0 2px var(--sp-3)">Die Daten liegen nur auf diesem Gerät. Garmin hat sie zwar auch — aber ein Jahr Verlauf neu zu laden dauert Minuten, und „Browserdaten löschen" nimmt alles mit. Ein Backup enthält Daten und Einstellungen, nicht den Schlüssel.${db.lastBackup ? ' Letztes Backup: ' + esc(dfDate.format(new Date(db.lastBackup))) + '.' : ''}</p>
+    <p class="note" style="margin:0 2px var(--s2)">Die Daten liegen nur auf diesem Gerät. Garmin hat sie zwar auch — aber ein Jahr Verlauf neu zu laden dauert Minuten, und „Browserdaten löschen" nimmt alles mit. Ein Backup enthält Daten und Einstellungen, nicht den Schlüssel.${db.lastBackup ? ' Letztes Backup: ' + esc(dfDate.format(new Date(db.lastBackup))) + '.' : ''}</p>
     <div class="btn-row">
       <button class="btn" id="btnExport">Backup speichern</button>
       <button class="btn" id="btnImport">Backup laden</button>
@@ -2861,13 +3059,13 @@ function wire() {
     const fi = e.target.closest('[data-fitness]');
     if (fi) { openFitness(fi.dataset.fitness); return; }
     const dy = e.target.closest('[data-day]');
-    if (dy) { dayView = dy.dataset.day === Core.today() ? null : dy.dataset.day; renderToday(); armBack(); return; }
+    if (dy) { dayView = dy.dataset.day === Core.today() ? null : dy.dataset.day; animNext = true; render(); armBack(); return; }
     const ds = e.target.closest('[data-daystep]');
     if (ds) {
       const cur = dayView || Core.today();
       const nd = Core.addDays(cur, +ds.dataset.daystep);
       dayView = nd >= Core.today() ? null : nd;
-      renderToday(); armBack(); return;
+      animNext = true; render(); armBack(); return;
     }
     const st = e.target.closest('[data-set]');
     if (st) {
@@ -2881,7 +3079,7 @@ function wire() {
       else if (k === 'patRange') patRange = num;
       else if (k === 'patTab') patTab = v;
       else if (k === 'sleepTarget') { sleepTarget = v; pfAll = false; }
-      render(); return;
+      animNext = true; render(); return;
     }
     const sc = e.target.closest('[data-scatter]');
     if (sc) { const id = sc.dataset.scatter; if (openScatter.has(id)) openScatter.delete(id); else openScatter.add(id); render(); return; }

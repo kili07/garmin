@@ -4,7 +4,13 @@
 
    Jede Funktion bekommt fertige Zahlen und liefert einen SVG-Text. Keine
    Farben im Code: alles läuft über Klassen, die style.css mit Tokens
-   einfärbt — so ziehen die Diagramme beim Theme-Wechsel mit.
+   einfärbt — so ziehen die Diagramme beim Theme-Wechsel mit. Die Farbe
+   einer Reihe kommt als Klasse an das SVG (z. B. c-hr) und steht dort als
+   --cc bereit; Linie, Punkte und Verlaufsfläche lesen sie von da.
+
+   Linien 2 px, Flächen als Verlauf nach unten, Gitter als 1-px-Haarlinie,
+   Balken höchstens 24 px breit mit gerundetem Ende oben und eckig an der
+   Grundlinie, Endpunkte mit einem Ring in Kartenfarbe (CLAUDE.md).
 
    Gezeichnet wird in einem festen Koordinatensystem (Breite 340); das SVG
    skaliert per viewBox auf die Kartenbreite. Schriftgrößen sind damit auf
@@ -22,6 +28,14 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fin = (v) => typeof v === 'number' && isFinite(v);
 const r1 = (v) => Math.round(v * 10) / 10;
+
+/* Verläufe brauchen eine id, die im ganzen Dokument eindeutig ist —
+   auf einer Seite stehen oft mehrere Diagramme. */
+let gid = 0;
+function areaDef() {
+  const id = 'ag' + (++gid);
+  return { id, def: `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="ag0"/><stop offset="1" class="ag1"/></linearGradient></defs>` };
+}
 
 function scale(d0, d1, p0, p1) {
   const k = (p1 - p0) / ((d1 - d0) || 1);
@@ -66,12 +80,16 @@ function extent(arrs, zero) {
 }
 
 const MON = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 
-/** Beschriftung der Zeitachse je nach Spanne: Tage, Monate oder Jahre. */
+/** Beschriftung der Zeitachse je nach Spanne: Wochentage, Tage, Monate oder Jahre. */
 function dateTicks(dates) {
   const n = dates.length, out = [];
   if (!n) return out;
-  if (n <= 45) {
+  if (n <= 10) {
+    // Eine Woche: jeder Tag mit Wochentag
+    dates.forEach((d, i) => { const [y, m, dd] = d.split('-').map(Number); out.push({ i, t: WD[new Date(y, m - 1, dd, 12).getDay()] }); });
+  } else if (n <= 45) {
     const step = n <= 15 ? 2 : 7;
     for (let i = n - 1; i >= 0; i -= step) {
       const [, m, d] = dates[i].split('-');
@@ -93,11 +111,27 @@ function dateTicks(dates) {
 function path(xs, ys) {
   let d = '', open = false;
   for (let i = 0; i < ys.length; i++) {
-    if (!fin(ys[i])) { open = false; continue; }
+    if (!fin(ys[i]) || !fin(xs[i])) { open = false; continue; }
     d += (open ? 'L' : 'M') + r1(xs[i]) + ' ' + r1(ys[i]);
     open = true;
   }
   return d;
+}
+
+/** Fläche unter einem Linienzug bis zur Grundlinie `base`, je Abschnitt
+    ohne Lücke eine eigene Fläche. */
+function areaPath(xs, ys, base) {
+  let out = '', seg = [];
+  const flush = () => {
+    if (seg.length > 1) {
+      out += 'M' + seg.map((i) => `${r1(xs[i])} ${r1(ys[i])}`).join('L')
+        + `L${r1(xs[seg[seg.length - 1]])} ${r1(base)}L${r1(xs[seg[0]])} ${r1(base)}Z`;
+    }
+    seg = [];
+  };
+  for (let i = 0; i < ys.length; i++) { if (fin(ys[i]) && fin(xs[i])) seg.push(i); else flush(); }
+  flush();
+  return out;
 }
 
 /** Fläche zwischen zwei Reihen (Normalband). */
@@ -115,21 +149,63 @@ function bandPath(xs, lo, hi) {
   return out;
 }
 
+/** Balken mit gerundetem Ende oben (Radius r) und eckig an der Grundlinie. */
+function barPath(x, y, w, h, r) {
+  if (!(w > 0) || !(h > 0)) return '';
+  r = Math.min(r == null ? 4 : r, w / 2, h);
+  return `M${r1(x)} ${r1(y + h)}V${r1(y + r)}A${r1(r)} ${r1(r)} 0 0 1 ${r1(x + r)} ${r1(y)}`
+    + `H${r1(x + w - r)}A${r1(r)} ${r1(r)} 0 0 1 ${r1(x + w)} ${r1(y + r)}V${r1(y + h)}Z`;
+}
+
+/** Endpunkt einer Linie: gefüllter Punkt mit Ring in Kartenfarbe. */
+const endDot = (x, y, cls) => `<circle class="end-dot${cls ? ' ' + esc(cls) : ''}" cx="${r1(x)}" cy="${r1(y)}" r="4"/>`;
+
 function yAxis(yt, y, x0, x1, fmtY) {
   // Beschriftungen, die über den Rand ragen würden, weglassen
   yt = yt.filter((v) => y(v) >= 4 && y(v) <= 1000);
   return yt.map((v) => `<line class="grid" x1="${x0}" x2="${x1}" y1="${r1(y(v))}" y2="${r1(y(v))}"/>`
-    + `<text class="ax" x="${x0 - 4}" y="${r1(y(v)) + 3}" text-anchor="end">${esc(fmtY(v))}</text>`).join('');
+    + `<text class="ax" x="${x0 - 6}" y="${r1(y(v)) + 3}" text-anchor="end">${esc(fmtY(v))}</text>`).join('');
+}
+
+/* ── Halbkreis ──────────────────────────────────────────────── */
+/** Gauge von 0 bis o.max (100) als oberer Halbkreis. Nur die Bögen; Zahl
+    und Wort setzt app.js als HTML darüber, damit sie aus CSS ihre Schrift
+    bekommen. o.st: Zustand (good, ok, warn, bad) — er färbt den Bogen.
+    Der Verlauf läuft vom blassen Anfang bis zur Spitze des Bogens, auch
+    bei kleinen Werten endet er also kräftig. */
+function gauge(v, o) {
+  o = o || {};
+  const max = o.max || 100, w = 248, sw = 14;
+  const r = (w - sw) / 2, cx = w / 2, cy = r + sw / 2, h = Math.ceil(cy + sw / 2);
+  const p = fin(v) ? Math.max(0, Math.min(1, v / max)) : 0;
+  const len = Math.PI * r;
+  const d = `M${sw / 2} ${cy}A${r} ${r} 0 0 1 ${w - sw / 2} ${cy}`;
+  const tip = cx - r * Math.cos(Math.PI * p);
+  const id = 'gg' + (++gid);
+  let s = `<svg class="gauge st-${esc(o.st || 'off')}" viewBox="0 0 ${w} ${h}" aria-hidden="true">`
+    + `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${sw / 2}" y1="0" x2="${r1(Math.max(sw, tip + sw / 2))}" y2="0">`
+    + '<stop offset="0" class="gs0"/><stop offset="1" class="gs1"/></linearGradient></defs>'
+    + `<path class="gauge-track" d="${d}"/>`;
+  if (p > 0) {
+    s += `<path class="gauge-fill" d="${d}" stroke="url(#${id})" style="--len:${r1(len)}"`
+      + ` stroke-dasharray="${r1(len)}" stroke-dashoffset="${r1(len * (1 - p))}"/>`;
+  }
+  return s + '</svg>';
 }
 
 /* ── Sparkline ──────────────────────────────────────────────── */
-/** Kleine Linie für Kacheln. `band` = [lo, hi] als waagrechter Streifen. */
+/** Kleine Linie für Metrik-Karten, meist die letzten sieben Tage. Linie
+    leise, der letzte Punkt in der Farbe seines Zustands (o.st). o.band =
+    [lo, hi] als waagrechter Streifen (Dein Normalbereich), o.partial: der
+    letzte Wert ist noch nicht fertig (heute) und bekommt einen hohlen Punkt.
+    Gezeichnet in der Breite, in der sie erscheint (o.w), damit der Punkt
+    rund bleibt und die Höhe stimmt. */
 function spark(vals, opt) {
   opt = opt || {};
-  const w = opt.w || 120, h = opt.h || 32;
+  const w = opt.w || 136, h = opt.h || 36;
   const ex = extent([vals, opt.band || []]);
   if (!ex || vals.filter(fin).length < 2) return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"></svg>`;
-  const x = scale(0, vals.length - 1, 2, w - 4), y = scale(ex[0], ex[1], h - 3, 3);
+  const x = scale(0, vals.length - 1, 5, w - 5), y = scale(ex[0], ex[1], h - 5, 5);
   let xs = vals.map((_, i) => x(i)), ys = vals.map((v) => (fin(v) ? y(v) : null));
   // Seltene Werte (Gewicht alle paar Tage) verbinden, statt einzelne Punkte zu zeigen
   if (opt.connect) {
@@ -139,18 +215,21 @@ function spark(vals, opt) {
   let last = ys.length - 1;
   while (last >= 0 && ys[last] == null) last--;
   const band = opt.band && fin(opt.band[0]) && fin(opt.band[1])
-    ? `<rect class="band" x="0" width="${w}" y="${r1(y(opt.band[1]))}" height="${r1(Math.max(1, y(opt.band[0]) - y(opt.band[1])))}"/>` : '';
+    ? `<rect class="band" x="0" width="${w}" y="${r1(y(opt.band[1]))}" height="${r1(Math.max(1, y(opt.band[0]) - y(opt.band[1])))}" rx="3"/>` : '';
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true">${band}`
     + `<path class="ln" d="${path(xs, ys)}"/>`
-    + (last >= 0 ? `<circle class="pt-last" cx="${r1(xs[last])}" cy="${r1(ys[last])}" r="2.6"/>` : '')
+    + (last >= 0 ? `<circle class="end st-${esc(opt.st || 'off')}${opt.partial ? ' partial' : ''}" cx="${r1(xs[last])}" cy="${r1(ys[last])}" r="3.5"/>` : '')
     + '</svg>';
 }
 
 /* ── Verlauf ────────────────────────────────────────────────── */
-/** Tageswerte mit gleitendem Mittel und Normalband.
-    o: { dates, vals, avg, lo, hi, fmtY, h, bars, goal, zero } */
+/** Tageswerte mit gleitendem Mittel und Normalband. Das Mittel ist die
+    Hauptlinie: 2 px im Akzent, darunter eine Verlaufsfläche. Bei wenigen
+    Tagen (eine Woche) gibt es kein Mittel, dann trägt die Tageslinie
+    Fläche und Punkte.
+    o: { dates, vals, avg, lo, hi, fmtY, h, bars, goal, zero, unit, cls } */
 function trend(o) {
-  const h = o.h || 190, x0 = 34, x1 = W - 6, top = 8, bot = h - 18;
+  const h = o.h || 200, x0 = 36, x1 = W - 8, top = 10, bot = h - 20;
   const ex = extent([o.vals, o.avg, o.lo, o.hi, o.goal != null ? [o.goal] : []], o.zero || o.bars);
   const n = o.dates.length;
   if (!ex || !n) return '<div class="chart-empty">Keine Werte im Zeitraum</div>';
@@ -159,27 +238,39 @@ function trend(o) {
   const y = scale(ex[0], ex[1], bot, top);
   const xs = o.dates.map((_, i) => x(i));
   const fmtY = o.fmtY || String;
-  let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${n}" data-x0="${x0}" data-x1="${x1}">`;
+  const yv = (arr) => arr.map((v) => (fin(v) ? y(v) : null));
+  const a = areaDef();
+  let s = `<svg class="chart-svg${o.cls ? ' ' + esc(o.cls) : ''}" viewBox="0 0 ${W} ${h}" data-n="${n}" data-x0="${x0}" data-x1="${x1}">${a.def}`;
   s += yAxis(ticks(ex[0], ex[1], 4, o.unit), y, x0, x1, fmtY);
-  if (o.lo && o.hi) s += `<path class="band" d="${bandPath(xs, o.lo.map((v) => (fin(v) ? y(v) : null)), o.hi.map((v) => (fin(v) ? y(v) : null)))}"/>`;
+  // Das Normalband liegt über der Verlaufsfläche, sonst ginge es in ihr unter
+  const band = o.lo && o.hi ? `<path class="band" d="${bandPath(xs, yv(o.lo), yv(o.hi))}"/>` : '';
+  if (o.bars) s += band;
   if (o.goal != null) s += `<line class="goal" x1="${x0}" x2="${x1}" y1="${r1(y(o.goal))}" y2="${r1(y(o.goal))}"/>`;
+  // Die Hauptlinie: das Mittel, ohne Mittel die Tageswerte selbst
+  const main = o.avg && o.avg.some(fin) && !(n <= 10 && !o.bars) ? o.avg : null;
   if (o.bars) {
-    const bw = Math.max(1, step * 0.72);
+    const bw = Math.max(1, Math.min(24, step * 0.66));
     o.vals.forEach((v, i) => {
       if (!fin(v) || v <= 0) return;
-      s += `<rect class="bar" x="${r1(x(i) - bw / 2)}" y="${r1(y(v))}" width="${r1(bw)}" height="${r1(Math.max(0.5, y(ex[0]) - y(v)))}"/>`;
+      s += `<path class="bar" d="${barPath(x(i) - bw / 2, y(v), bw, Math.max(0.5, y(ex[0]) - y(v)), Math.min(4, bw / 2))}"/>`;
     });
-  } else if (n <= 120) {
-    // Bei wenigen Tagen hilft die Verbindungslinie beim Lesen, bei drei Monaten ist sie nur Unruhe
-    if (n <= 45) s += `<path class="ln-day" d="${path(xs, o.vals.map((v) => (fin(v) ? y(v) : null)))}"/>`;
-    o.vals.forEach((v, i) => { if (fin(v)) s += `<circle class="pt" cx="${r1(x(i))}" cy="${r1(y(v))}" r="${n <= 45 ? 2.4 : 1.6}"/>`; });
   } else {
-    o.vals.forEach((v, i) => { if (fin(v)) s += `<circle class="pt dim" cx="${r1(x(i))}" cy="${r1(y(v))}" r="1.1"/>`; });
+    const line = main || o.vals;
+    s += `<path class="area" fill="url(#${a.id})" d="${areaPath(xs, yv(line), bot)}"/>` + band;
+    if (!main) s += `<path class="ln-avg" d="${path(xs, yv(o.vals))}"/>`;
+    else if (n <= 45) s += `<path class="ln-day" d="${path(xs, yv(o.vals))}"/>`;
+    // Tageswerte als leise Punkte; ohne Mittel sind sie die Linie selbst
+    const r = !main ? 3.5 : n <= 45 ? 2.4 : n <= 120 ? 1.7 : 1.2;
+    o.vals.forEach((v, i) => { if (fin(v)) s += `<circle class="pt${!main ? ' on' : n > 120 ? ' dim' : ''}" cx="${r1(x(i))}" cy="${r1(y(v))}" r="${r}"/>`; });
   }
-  if (o.avg) s += `<path class="ln-avg" d="${path(xs, o.avg.map((v) => (fin(v) ? y(v) : null)))}"/>`;
+  if (main) {
+    s += `<path class="ln-avg" d="${path(xs, yv(main))}"/>`;
+    let li = main.length - 1;
+    while (li >= 0 && !fin(main[li])) li--;
+    if (li >= 0) s += endDot(x(li), y(main[li]));
+  }
   for (const t of dateTicks(o.dates)) {
-    s += `<line class="tick" x1="${r1(x(t.i))}" x2="${r1(x(t.i))}" y1="${bot}" y2="${bot + 3}"/>`
-      + `<text class="ax" x="${r1(x(t.i))}" y="${h - 4}" text-anchor="middle">${esc(t.t)}</text>`;
+    s += `<text class="ax" x="${r1(x(t.i))}" y="${h - 4}" text-anchor="middle">${esc(t.t)}</text>`;
   }
   s += `<line class="cursor hidden" x1="0" x2="0" y1="${top}" y2="${bot}"/>`;
   return s + '</svg>';
@@ -187,10 +278,11 @@ function trend(o) {
 
 /* ── Balken ─────────────────────────────────────────────────── */
 /** items: [{ label, v, parts:[{v, cls}], cur }] — `parts` stapelt Anteile
-    (z. B. Sportarten), `cur` hebt den laufenden Zeitraum hervor. */
+    (z. B. Sportarten), getrennt durch eine 2-px-Fuge in Kartenfarbe; `cur`
+    hebt den laufenden Zeitraum hervor. */
 function bars(items, o) {
   o = o || {};
-  const h = o.h || 150, x0 = o.noAxis ? 4 : 34, x1 = W - 4, top = 14, bot = h - 18;
+  const h = o.h || 160, x0 = o.noAxis ? 4 : 36, x1 = W - 4, top = 16, bot = h - 20;
   const vals = items.map((it) => it.v);
   // Mittelwerte (HRV 53 gegen 56 ms) gehen auf einer Achse ab 0 unter — dann ab knapp unter dem kleinsten Wert
   const zero = o.zero !== false;
@@ -198,7 +290,7 @@ function bars(items, o) {
   if (!ex || !items.length) return '<div class="chart-empty">Keine Werte im Zeitraum</div>';
   const lo = zero ? 0 : ex[0] - (ex[1] - ex[0]) * 0.5;
   const y = scale(lo, ex[1], bot, top);
-  const step = (x1 - x0) / items.length, bw = Math.min(28, step * 0.66);
+  const step = (x1 - x0) / items.length, bw = Math.min(24, step * 0.66);
   const fmtY = o.fmtY || String;
   let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${items.length}" data-x0="${x0}" data-x1="${x1}">`;
   if (!o.noAxis) s += yAxis(ticks(lo, ex[1], o.nTicks || 3, o.unit), y, x0, x1, fmtY);
@@ -207,19 +299,23 @@ function bars(items, o) {
   // Werte über den Balken nur, wenn sie nebeneinander Platz haben
   const showVals = o.values && Math.max(...items.map((it) => (fin(it.v) ? String(fmtY(it.v)).length : 0))) * 4.9 <= step;
   const lastI = items.length - 1;
+  const GAP = 2;
   items.forEach((it, i) => {
-    const cx = x0 + step * (i + 0.5), bx = r1(cx - bw / 2);
+    const cx = x0 + step * (i + 0.5), bx = cx - bw / 2;
     if (it.parts && it.parts.length) {
+      const ps = it.parts.filter((p) => p.v > 0);
       let base = 0;
-      for (const p of it.parts) {
-        if (!(p.v > 0)) continue;
-        s += `<rect class="${esc(p.cls)}" x="${bx}" y="${r1(y(base + p.v))}" width="${r1(bw)}" height="${r1(Math.max(0.5, y(base) - y(base + p.v)))}"/>`;
+      ps.forEach((p, j) => {
+        const yTop = y(base + p.v), yBase = y(base);
+        // Fuge zum Teil darunter; der oberste bekommt das gerundete Ende
+        const hh = Math.max(0.5, yBase - yTop - (j ? GAP : 0));
+        s += `<path class="${esc(p.cls)}" d="${barPath(bx, yTop, bw, hh, j === ps.length - 1 ? Math.min(4, bw / 2) : 0)}"/>`;
         base += p.v;
-      }
+      });
     } else if (fin(it.v) && (it.v > 0 || !zero)) {
-      s += `<rect class="bar${it.cur ? ' cur' : ''}${it.cls ? ' ' + esc(it.cls) : ''}" x="${bx}" y="${r1(y(it.v))}" width="${r1(bw)}" height="${r1(Math.max(0.5, bot - y(it.v)))}" rx="2"/>`;
+      s += `<path class="bar${it.cur ? ' cur' : ''}${it.cls ? ' ' + esc(it.cls) : ''}" d="${barPath(bx, y(it.v), bw, Math.max(0.5, bot - y(it.v)), Math.min(4, bw / 2))}"/>`;
     }
-    if (showVals && fin(it.v) && (it.v > 0 || !zero)) s += `<text class="bar-v" x="${r1(cx)}" y="${r1(y(it.v)) - 3}" text-anchor="middle">${esc(fmtY(it.v))}</text>`;
+    if (showVals && fin(it.v) && (it.v > 0 || !zero)) s += `<text class="bar-v${it.cur ? ' cur' : ''}" x="${r1(cx)}" y="${r1(y(it.v)) - 4}" text-anchor="middle">${esc(fmtY(it.v))}</text>`;
     // Von hinten zählen: Die letzte (laufende) Beschriftung steht immer da
     if ((lastI - i) % every === 0) s += `<text class="ax${it.cur ? ' cur' : ''}" x="${r1(cx)}" y="${h - 4}" text-anchor="middle">${esc(it.label)}</text>`;
   });
@@ -230,7 +326,7 @@ function bars(items, o) {
 /* ── Streudiagramm ──────────────────────────────────────────── */
 function scatter(pts, o) {
   o = o || {};
-  const h = o.h || 170, x0 = 34, x1 = W - 8, top = 8, bot = h - 20;
+  const h = o.h || 180, x0 = 36, x1 = W - 8, top = 10, bot = h - 22;
   const ex = extent([pts.map((p) => p.x)]), ey = extent([pts.map((p) => p.y)]);
   if (!ex || !ey) return '';
   const x = scale(ex[0], ex[1], x0, x1), y = scale(ey[0], ey[1], bot, top);
@@ -240,7 +336,7 @@ function scatter(pts, o) {
   for (const v of ticks(ex[0], ex[1], 4)) s += `<text class="ax" x="${r1(x(v))}" y="${h - 6}" text-anchor="middle">${esc(fx(v))}</text>`;
   // Drittelgrenzen: dort trennt die Auswertung „wenig" von „viel"
   for (const v of [o.xLo, o.xHi]) if (fin(v)) s += `<line class="split" x1="${r1(x(v))}" x2="${r1(x(v))}" y1="${top}" y2="${bot}"/>`;
-  for (const p of pts) s += `<circle class="pt sc" cx="${r1(x(p.x))}" cy="${r1(y(p.y))}" r="2.3"/>`;
+  for (const p of pts) s += `<circle class="pt sc" cx="${r1(x(p.x))}" cy="${r1(y(p.y))}" r="3"/>`;
   if (o.fit && pts.length > 2) {
     const mx = pts.reduce((a, p) => a + p.x, 0) / pts.length, my = pts.reduce((a, p) => a + p.y, 0) / pts.length;
     let sxy = 0, sxx = 0;
@@ -250,16 +346,17 @@ function scatter(pts, o) {
       s += `<line class="fit" x1="${r1(x(ex[0]))}" y1="${r1(y(f(ex[0])))}" x2="${r1(x(ex[1]))}" y2="${r1(y(f(ex[1])))}"/>`;
     }
   }
-  if (o.xLabel) s += `<text class="ax" x="${x1}" y="${bot - 4}" text-anchor="end">${esc(o.xLabel)} →</text>`;
+  if (o.xLabel) s += `<text class="ax" x="${x1}" y="${bot - 6}" text-anchor="end">${esc(o.xLabel)} →</text>`;
   return s + '</svg>';
 }
 
 /* ── Belastung ──────────────────────────────────────────────── */
-/** Akute Belastung (7 Tage) als Fläche, chronische (Wochenmittel über 28
-    Tage) als Linie, dazu der gut verträgliche Bereich 0,8–1,3 × chronisch. */
+/** Akute Belastung (7 Tage) als Linie mit Fläche, chronische (Wochenmittel
+    über 28 Tage) als ruhige Linie, dazu der gut verträgliche Bereich
+    0,8–1,3 × chronisch. */
 function load(rows, o) {
   o = o || {};
-  const h = o.h || 170, x0 = 34, x1 = W - 6, top = 8, bot = h - 18;
+  const h = o.h || 180, x0 = 36, x1 = W - 8, top = 10, bot = h - 20;
   const n = rows.length;
   if (!n) return '<div class="chart-empty">Noch keine Belastungsdaten</div>';
   const ac = rows.map((r) => r.acute), ch = rows.map((r) => r.chronic);
@@ -267,12 +364,14 @@ function load(rows, o) {
   if (!ex) return '<div class="chart-empty">Noch keine Belastungsdaten</div>';
   const step = (x1 - x0) / n, x = (i) => x0 + step * (i + 0.5), y = scale(0, ex[1], bot, top);
   const xs = rows.map((_, i) => x(i));
-  let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${n}" data-x0="${x0}" data-x1="${x1}">`;
+  const a = areaDef();
+  let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${n}" data-x0="${x0}" data-x1="${x1}">${a.def}`;
   s += yAxis(ticks(0, ex[1], 3), y, x0, x1, (v) => Math.round(v));
   s += `<path class="band-ok" d="${bandPath(xs, ch.map((v) => y(v * 0.8)), ch.map((v) => y(v * 1.3)))}"/>`;
-  s += `<path class="area-acute" d="${path(xs, ac.map(y))}L${r1(xs[n - 1])} ${bot}L${r1(xs[0])} ${bot}Z"/>`;
-  s += `<path class="ln-acute" d="${path(xs, ac.map(y))}"/>`;
+  s += `<path class="area" fill="url(#${a.id})" d="${areaPath(xs, ac.map(y), bot)}"/>`;
   s += `<path class="ln-chronic" d="${path(xs, ch.map(y))}"/>`;
+  s += `<path class="ln-avg" d="${path(xs, ac.map(y))}"/>`;
+  s += endDot(xs[n - 1], y(ac[n - 1]));
   for (const t of dateTicks(rows.map((r) => r.date))) s += `<text class="ax" x="${r1(x(t.i))}" y="${h - 4}" text-anchor="middle">${esc(t.t)}</text>`;
   s += `<line class="cursor hidden" x1="0" x2="0" y1="${top}" y2="${bot}"/>`;
   return s + '</svg>';
@@ -285,7 +384,7 @@ function load(rows, o) {
     App lädt nichts von fremden Servern nach. */
 function track(pts, vals, o) {
   o = o || {};
-  const h = o.h || 230, padd = 10;
+  const h = o.h || 230, padd = 12;
   if (!pts || pts.length < 2) return '';
   let la0 = Infinity, la1 = -Infinity, lo0 = Infinity, lo1 = -Infinity;
   for (const [la, lo] of pts) { la0 = Math.min(la0, la); la1 = Math.max(la1, la); lo0 = Math.min(lo0, lo); lo1 = Math.max(lo1, lo); }
@@ -314,29 +413,28 @@ function track(pts, vals, o) {
   return s + '</svg>';
 }
 
-/** Kurve über Zeit oder Strecke (Puls, Tempo, Höhe). o.marks: Zeitpunkte
-    (in der Einheit von xs), die als senkrechter Strich markiert werden. */
+/** Kurve über Zeit oder Strecke (Puls, Tempo, Höhe). o.cls färbt sie
+    (c-hr, c-hrv, c-bb, c-spo2, c-alt), o.fill legt eine Verlaufsfläche
+    darunter. o.marks: Zeitpunkte (in der Einheit von xs), die als
+    senkrechter Strich markiert werden. */
 function curve(xs, ys, o) {
   o = o || {};
-  const h = o.h || 120, x0 = 34, x1 = W - 6, top = 8, bot = h - 18;
+  const h = o.h || 130, x0 = 36, x1 = W - 8, top = 10, bot = h - 20;
   const ey = extent([ys], o.zero);
   const good = xs.filter(fin);
   if (!ey || good.length < 2) return '';
   const x = scale(good[0], good[good.length - 1], x0, x1), y = scale(ey[0], ey[1], bot, top);
   const X = xs.map((v) => (fin(v) ? x(v) : null)), Y = ys.map((v) => (fin(v) ? (o.invert ? y(ey[1] - v + ey[0]) : y(v)) : null));
   const fy = o.fmtY || String, fx = o.fmtX || String;
-  let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${xs.length}" data-x0="${x0}" data-x1="${x1}">`;
+  const a = areaDef();
+  let s = `<svg class="chart-svg${o.cls ? ' ' + esc(o.cls) : ''}" viewBox="0 0 ${W} ${h}" data-n="${xs.length}" data-x0="${x0}" data-x1="${x1}">${a.def}`;
   const yt = ticks(ey[0], ey[1], 3, o.unit).filter((v) => v >= ey[0] && v <= ey[1]);
   s += yt.map((v) => {
     const yy = o.invert ? y(ey[1] - v + ey[0]) : y(v);
-    return `<line class="grid" x1="${x0}" x2="${x1}" y1="${r1(yy)}" y2="${r1(yy)}"/><text class="ax" x="${x0 - 4}" y="${r1(yy) + 3}" text-anchor="end">${esc(fy(v))}</text>`;
+    return `<line class="grid" x1="${x0}" x2="${x1}" y1="${r1(yy)}" y2="${r1(yy)}"/><text class="ax" x="${x0 - 6}" y="${r1(yy) + 3}" text-anchor="end">${esc(fy(v))}</text>`;
   }).join('');
-  if (o.fill) {
-    let first = -1, last = -1;
-    Y.forEach((v, i) => { if (v != null && X[i] != null) { if (first < 0) first = i; last = i; } });
-    if (first >= 0) s += `<path class="area ${esc(o.cls || '')}" d="${path(X, Y)}L${r1(X[last])} ${bot}L${r1(X[first])} ${bot}Z"/>`;
-  }
-  s += `<path class="ln-c ${esc(o.cls || '')}" d="${path(X, Y)}"/>`;
+  if (o.fill) s += `<path class="area" fill="url(#${a.id})" d="${areaPath(X, Y, bot)}"/>`;
+  s += `<path class="ln-c" d="${path(X, Y)}"/>`;
   // Markierte Zeitpunkte (Pulsspitzen der Nacht): Strich über die ganze Höhe, Punkt oben
   for (const v of o.marks || []) {
     if (!fin(v) || v < good[0] || v > good[good.length - 1]) continue;
@@ -350,13 +448,13 @@ function curve(xs, ys, o) {
 }
 
 /* ── Schlafphasen über die Nacht ────────────────────────────── */
-/** Phasen als Blöcke in vier Bahnen, Wach oben, Tief unten — wie in Garmin
-    Connect. segs: [[von, bis, Stufe]] in Uhrzeit-Minuten (Achse wie xs),
+/** Phasen als Blöcke in vier Bahnen, Wach oben, Tief unten.
+    segs: [[von, bis, Stufe]] in Uhrzeit-Minuten (Achse wie xs),
     Stufe 0 Tief, 1 Leicht, 2 REM, 3 Wach. xs ist das Raster der übrigen
     Nachtkurven: gleiche Achse, gleiches Antippen. */
 function hypno(xs, segs, o) {
   o = o || {};
-  const h = o.h || 104, x0 = 34, x1 = W - 6, top = 4, bot = h - 18;
+  const h = o.h || 112, x0 = 44, x1 = W - 8, top = 4, bot = h - 20;
   const n = xs.length;
   if (n < 2 || !segs.length) return '';
   const x = scale(xs[0], xs[n - 1], x0, x1);
@@ -365,12 +463,12 @@ function hypno(xs, segs, o) {
   let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}" data-n="${n}" data-x0="${x0}" data-x1="${x1}">`;
   ['Wach', 'REM', 'Leicht', 'Tief'].forEach((l, i) => {
     s += `<line class="grid" x1="${x0}" x2="${x1}" y1="${r1(top + lane * (i + 1))}" y2="${r1(top + lane * (i + 1))}"/>`
-      + `<text class="ax" x="${x0 - 4}" y="${r1(top + lane * (i + 0.5) + 3)}" text-anchor="end">${l}</text>`;
+      + `<text class="ax" x="${x0 - 6}" y="${r1(top + lane * (i + 0.5) + 3)}" text-anchor="end">${l}</text>`;
   });
   for (const [a, b, k] of segs) {
     const xa = Math.max(x0, x(a)), xb = Math.min(x1, x(b));
     if (xb <= xa) continue;
-    s += `<rect class="${cls[k]}" x="${r1(xa)}" y="${r1(top + lane * row[k] + 1)}" width="${r1(Math.max(0.6, xb - xa))}" height="${r1(lane - 2)}" rx="1.5"/>`;
+    s += `<rect class="${cls[k]}" x="${r1(xa)}" y="${r1(top + lane * row[k] + 2)}" width="${r1(Math.max(0.6, xb - xa))}" height="${r1(lane - 4)}" rx="2"/>`;
   }
   for (const v of ticks(xs[0], xs[n - 1], 4, 60)) s += `<text class="ax" x="${r1(x(v))}" y="${h - 4}" text-anchor="middle">${esc((o.fmtX || String)(v))}</text>`;
   s += `<line class="cursor hidden" x1="0" x2="0" y1="${top}" y2="${bot}"/>`;
@@ -387,21 +485,21 @@ function weekdays(vals, o) {
   // Nicht bei 0 anfangen: Unterschiede von 20 Minuten Schlaf sähen sonst gleich aus
   const span = hi - lo || Math.abs(hi) * 0.1 || 1;
   lo -= span * 0.6; hi += span * 0.15;
-  const h = 96, bot = h - 16, top = 14, step = W / 7, bw = step * 0.6;
+  const h = 104, bot = h - 20, top = 16, step = W / 7, bw = Math.min(24, step * 0.6);
   const y = scale(lo, hi, bot, top);
   let s = `<svg class="chart-svg" viewBox="0 0 ${W} ${h}">`;
   vals.forEach((v, i) => {
     const cx = step * (i + 0.5);
     if (fin(v)) {
-      s += `<rect class="bar${o.mark === i ? ' cur' : ''}" x="${r1(cx - bw / 2)}" y="${r1(y(v))}" width="${r1(bw)}" height="${r1(bot - y(v))}" rx="3"/>`;
-      s += `<text class="bar-v" x="${r1(cx)}" y="${r1(y(v)) - 3}" text-anchor="middle">${esc((o.fmtY || String)(v))}</text>`;
+      s += `<path class="bar${o.mark === i ? ' cur' : ''}" d="${barPath(cx - bw / 2, y(v), bw, bot - y(v), 4)}"/>`;
+      s += `<text class="bar-v${o.mark === i ? ' cur' : ''}" x="${r1(cx)}" y="${r1(y(v)) - 4}" text-anchor="middle">${esc((o.fmtY || String)(v))}</text>`;
     }
-    s += `<text class="ax" x="${r1(cx)}" y="${h - 3}" text-anchor="middle">${lbl[i]}</text>`;
+    s += `<text class="ax${o.mark === i ? ' cur' : ''}" x="${r1(cx)}" y="${h - 4}" text-anchor="middle">${lbl[i]}</text>`;
   });
   return s + '</svg>';
 }
 
-return { spark, trend, bars, scatter, load, track, curve, hypno, weekdays, ticks, dateTicks, esc };
+return { gauge, spark, trend, bars, scatter, load, track, curve, hypno, weekdays, ticks, dateTicks, esc };
 })();
 
 if (typeof module === 'object' && module.exports) module.exports = Charts;
