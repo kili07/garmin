@@ -8,8 +8,8 @@
    Inhalt
    1. Eine Nacht: Pulsspitzen (unruhige Momente), ruhigste Strecke,
       Pulstiefpunkt, wann Du wach gewesen sein könntest (erhöhter Puls,
-      Lücken) und, wenn Garmin den Phasenverlauf mitschickt, der Aufbau der
-      Nacht aus Zyklen
+      Lücken), die Nacht ohne Wachzeit, die Du als falsch markierst, und,
+      wenn Garmin den Phasenverlauf mitschickt, der Aufbau aus Zyklen
    2. Steckbrief über viele Nächte: Was unterscheidet unruhige von ruhigen
       Nächten, solche mit viel von solchen mit wenig Tief- oder REM-Schlaf?
    3. Phasen über die Schlafdauer, Idealbereich, Verteilung der Unruhe,
@@ -204,6 +204,125 @@ function wakeHints(n) {
   }
   const total = (l) => (l ? l.reduce((t, s) => t + s.dur, 0) : null);
   return { up, gaps, upMin: total(up), gapMin: total(gaps), step };
+}
+
+/* Korrigierte Nacht: Strecken aus wakeHints, die Du als Schlaf markierst
+   (`wfx` in den Tageswerten: [von, bis, Rand] in Minuten ab dem
+   Einschlafen, Rand 1 = beim Einschlafen oder Aufwachen). Ihre Dauer geht
+   von Garmins Wachzeit ab und zum Schlaf dazu (als Leichtschlaf, die Phase
+   kennt niemand); jede Strecke mitten in der Nacht ist einmal weniger
+   aufgewacht. Garmins Werte bleiben in `gx` erhalten. Den Score rechnet
+   Garmin nach einer Formel, die nicht öffentlich ist. Die App lernt
+   deshalb aus Deinen Nächten, wie Dein Score von Dauer, Wachzeit,
+   Aufwachen, Phasen und Stress abhängt (lineare Regression), und zählt die
+   Änderung, die das Modell für die korrigierte Nacht vorhersagt, zu
+   Garmins Score dazu. So bleibt Garmins Wert der Anker, geschätzt ist nur
+   der Unterschied. */
+const FIX_KEYS = ['slp', 'light', 'awake', 'awakeN', 'slpScore', 'slpQ'];
+const FIX_MIN = 30;   // so viele Nächte mit allen Werten braucht das Modell
+
+/** Garmins Werte einer Nacht, auch wenn sie korrigiert ist. */
+const garminNight = (x) => (x && x.gx ? Object.assign({}, x, x.gx) : x);
+
+function scoreRow(x, stress) {
+  const h = x.slp / 3600, need = (fin(x.need) ? x.need : 480) / 60;
+  return [1, Math.max(0, need - h), Math.min(h, 10), x.awake / 60, x.awakeN,
+    (x.deep / x.slp) * 100, (x.rem / x.slp) * 100, fin(x.slpStress) ? x.slpStress : stress];
+}
+
+/** Lineares Gleichungssystem A·x = b (Gauß mit Pivotsuche). */
+function solve(A, b) {
+  const n = b.length, M = A.map((r, i) => r.concat([b[i]]));
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (Math.abs(M[p][c]) < 1e-12) return null;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  return M.map((r, i) => r[n] / r[i]);
+}
+
+/* Vorzeichen, die das Modell einhalten muss (Spalten von scoreRow): Fehlt
+   Schlaf zum Bedarf, mehr Wachzeit, öfter aufgewacht → nie besser; länger
+   geschlafen → nie schlechter. Wachzeit und Aufwachen hängen eng
+   zusammen (wer öfter aufwacht, ist länger wach); ohne diese Grenzen
+   teilt eine Regression ihren Einfluss beliebig auf, etwa +2 Punkte je
+   Minute wach und −13 je Aufwachen, und eine Korrektur, die nur eines von
+   beiden ändert, ergäbe Unsinn. */
+const FIX_SIGN = [0, -1, 1, -1, -1, 0, 0, 0];
+
+/** Wie Dein Score von den Werten der Nacht abhängt, aus Garmins Werten
+    aller Nächte. null bei weniger als FIX_MIN Nächten. `err`: mittlere
+    Abweichung des Modells von Garmins Score in Punkten. Gerechnet auf
+    standardisierten Größen mit leichter Dämpfung (Ridge, 1 % der Nächte),
+    damit eng verwandte Größen sich den Einfluss teilen; verletzt eine
+    Größe ihr Vorzeichen, fällt sie heraus und es wird neu gerechnet. */
+function scoreModel(days) {
+  const nights = Object.values(days || {}).map(garminNight)
+    .filter((x) => fin(x.slpScore) && x.slp > 0 && fin(x.awake) && fin(x.awakeN) && fin(x.deep) && fin(x.rem));
+  if (nights.length < FIX_MIN) return null;
+  const st = nights.map((x) => x.slpStress).filter(fin);
+  const stress = st.length ? mean(st) : 0;
+  const X = nights.map((x) => scoreRow(x, stress)), y = nights.map((x) => x.slpScore);
+  const k = X[0].length, N = X.length;
+  const mu = [0], sg = [1];
+  for (let p = 1; p < k; p++) { const c = X.map((r) => r[p]); mu.push(mean(c)); sg.push(sd(c) || 0); }
+  const on = sg.map((s, p) => p === 0 || s > 1e-9);   // Spalten ohne Streuung (nie Stress gemessen) fallen weg
+  let beta;
+  for (let round = 0; round < k; round++) {
+    const cols = on.map((o, p) => (o ? p : -1)).filter((p) => p >= 0);
+    const Z = X.map((r) => cols.map((p) => (p === 0 ? 1 : (r[p] - mu[p]) / sg[p])));
+    const m = cols.length, A = Array.from({ length: m }, () => new Array(m).fill(0)), b = new Array(m).fill(0);
+    Z.forEach((r, i) => { for (let p = 0; p < m; p++) { b[p] += r[p] * y[i]; for (let q = 0; q < m; q++) A[p][q] += r[p] * r[q]; } });
+    for (let p = 1; p < m; p++) A[p][p] += 0.01 * N;
+    const z = solve(A, b);
+    if (!z || !z.every(fin)) return null;
+    // Zurück auf die ursprünglichen Größen
+    beta = new Array(k).fill(0);
+    cols.forEach((p, j) => { if (p) { beta[p] = z[j] / sg[p]; beta[0] -= beta[p] * mu[p]; } else beta[0] += z[j]; });
+    const bad = beta.findIndex((v, p) => FIX_SIGN[p] && on[p] && v * FIX_SIGN[p] < 0);
+    if (bad < 0) break;
+    on[bad] = false;
+  }
+  const err = mean(X.map((r, i) => Math.abs(r.reduce((s, v, p) => s + v * beta[p], 0) - y[i])));
+  return { beta, stress, n: N, err };
+}
+
+/** Garmins Einordnung des Scores (ausgezeichnet ab 90, gut ab 80, mittel ab 60). */
+const scoreQ = (s) => (s >= 90 ? 'EXCELLENT' : s >= 80 ? 'GOOD' : s >= 60 ? 'FAIR' : 'POOR');
+
+/** Korrektur auf die Tageswerte x anwenden (verändert x). Erst kommen
+    Garmins Werte zurück, dann wird aus `wfx` neu gerechnet. `fresh`: Die
+    Schlafwerte kommen gerade frisch von Garmin, ein altes `gx` gilt nicht. */
+function applyFix(x, model, fresh) {
+  if (!x) return x;
+  if (x.gx) {
+    if (!fresh) for (const k of FIX_KEYS) { if (k in x.gx) x[k] = x.gx[k]; else delete x[k]; }
+    delete x.gx;
+  }
+  if (!Array.isArray(x.wfx) || !x.wfx.length || !fin(x.awake) || !(x.slp > 0)) return x;
+  const g = {};
+  for (const k of FIX_KEYS) if (k in x) g[k] = x[k];
+  const sec = Math.min(x.awake, x.wfx.reduce((s, [a, b]) => s + (b - a), 0) * 60);
+  const n = x.wfx.filter((w) => !w[2]).length;
+  x.gx = g;
+  x.awake -= sec;
+  x.slp += sec;
+  if (fin(x.light)) x.light += sec;
+  if (fin(x.awakeN)) x.awakeN = Math.max(0, x.awakeN - n);
+  if (fin(g.slpScore) && model && fin(g.awakeN) && fin(x.deep) && fin(x.rem)) {
+    const o = scoreRow(Object.assign({}, x, g), model.stress), c = scoreRow(x, model.stress);
+    const d = c.reduce((s, v, p) => s + (v - o[p]) * model.beta[p], 0);
+    // Weniger Wachzeit macht eine Nacht nicht schlechter, auch wenn das Modell knapp ins Minus rutscht
+    x.slpScore = Math.min(100, Math.round(g.slpScore + Math.max(0, d)));
+    if (g.slpQ) x.slpQ = scoreQ(x.slpScore);
+  }
+  return x;
 }
 
 /** Alles, was sich aus den Messreihen einer Nacht (Core.mapNight) erkennen
@@ -604,6 +723,7 @@ function coffee(db, idx, from, to) {
 return {
   SPIKE, NIGHT_FIELDS, FACTORS, TARGETS, MIN_NIGHTS, MIN_GROUP, T_SOLID,
   WAKE, coverage, wakeHints, nightEvents, nightSummary,
+  FIX_KEYS, FIX_MIN, garminNight, scoreModel, scoreQ, applyFix,
   val, split, compare, targets, profile, headline,
   phaseGain, ideal, persistence, byHour, unrest,
   COFFEE_OUT, coffee,

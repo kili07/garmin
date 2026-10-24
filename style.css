@@ -312,7 +312,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; backgrou
 .gauge-val .num.na{color:var(--muted)}
 .gauge-ends{display:flex; justify-content:space-between; width:248px; max-width:100%; margin:var(--s-half) auto 0; padding:0 2px;
   font:500 11px/16px var(--font-ui); color:var(--muted); font-variant-numeric:tabular-nums}
-.hero-q{display:flex; justify-content:center; margin-top:var(--s-half)}
+.hero-q{display:flex; justify-content:center; gap:var(--s1); margin-top:var(--s-half)}
 .hero-line{text-align:center; color:var(--text-2); font-size:var(--fs-small); line-height:20px; margin:var(--s1) 0 0}
 .hero .stats{margin-top:var(--s2)}
 .hero .phases{margin-top:var(--s2)}
@@ -427,6 +427,11 @@ rect.ph-deep,path.ph-deep{fill:var(--ph-deep)} rect.ph-light,path.ph-light{fill:
 rect.ph-rem,path.ph-rem{fill:var(--ph-rem)} rect.ph-awake,path.ph-awake{fill:var(--ph-awake)}
 /* Messlücke im Puls (Wann wach?): leer, gestrichelt umrandet */
 rect.wk-gap{fill:var(--surface-3); stroke:var(--muted); stroke-width:1; stroke-dasharray:3 2}
+/* Von Dir als Schlaf markiert: blass, damit die Strecke sichtbar bleibt */
+rect.wk-ok{fill:var(--bar-dim)}
+.wk-rows > div{align-items:center}
+.wk-rows .btn{flex:none}
+.fix-note{margin-top:var(--s2)}
 .legend{display:flex; flex-wrap:wrap; align-items:center; gap:var(--s-half) var(--s2); margin-top:var(--s1); font-size:12px; line-height:16px; color:var(--muted)}
 .legend span{display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
 .legend i{width:8px; height:8px; border-radius:2px; display:inline-block; flex:none}

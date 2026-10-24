@@ -33,7 +33,10 @@ eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das 
   - **Wann wach?** (seit 2.2.0): Garmin nennt nur, wie lange und wie oft Du wach warst, nicht wann. Die App zeigt
     auf der Zeitachse der Nacht, wo der Puls deutlich über Deinem Schlafniveau lag und wo die Uhr gar keinen Puls
     gemessen hat, mit Uhrzeit und Dauer, gegen Garmins Summe. Sieht man davon im Puls wenig, kommt Garmins
-    Wachzeit vermutlich aus der Bewegung,
+    Wachzeit vermutlich aus der Bewegung. Weißt Du, dass Du in einer Strecke geschlafen hast, tippst Du „Schlaf“
+    (seit 2.3.0): Die App zieht sie von Garmins Wachzeit ab, zählt sie zum Schlaf und schätzt den Score neu, aus
+    dem, wie Dein Score in Deinen Nächten von Dauer, Wachzeit und Aufwachen abhängt. Die korrigierte Nacht gilt
+    überall, mit dem Vermerk „korrigiert“ und Garmins Wert daneben,
   - die Kurven der Nacht: Puls, HRV, Body Battery und SpO2 auf einer Zeitachse; antippen zeigt die Uhrzeit,
   - **Unruhe und Aufbau:** Pulsspitzen (der Puls springt kurz an, meist eine Weckreaktion) mit Uhrzeit, in der
     Pulskurve markiert, gegen Deinen Schnitt; wie sie sich über die Nacht verteilen, die längste ruhige Strecke und
@@ -167,7 +170,7 @@ Vor jedem Neuladen Service Worker und Caches leeren (siehe Bauanleitung, Abschni
 | `fonts/`, `licenses/` | Inter und Space Grotesk (SIL Open Font License), Lizenz der Lucide-Icons (ISC) |
 | `app.js` | Oberfläche, Speicher, Abgleich mit Garmin |
 | `core.js` | Umrechnung der Garmin-Antworten, Normalbereiche, Belastung, Zusammenhänge (in Node testbar) |
-| `sleep.js` | Schlafmuster: Pulsspitzen, Wach-Hinweise und Aufbau einer Nacht, Vergleich der Nächte, Phasen, Unruhe (in Node testbar) |
+| `sleep.js` | Schlafmuster: Pulsspitzen, Wach-Hinweise, korrigierte Nacht und Aufbau einer Nacht, Vergleich der Nächte, Phasen, Unruhe (in Node testbar) |
 | `charts.js` | Diagramme als SVG |
 | `fit.js` | ZIP und FIT lesen (Aktivitätsdateien) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline und Installieren |

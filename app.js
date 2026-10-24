@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -115,6 +115,18 @@ function normalize(src) {
     const x = d.days[k];
     if ('coffee' in x && !(Number.isInteger(x.coffee) && x.coffee >= 0 && x.coffee < 1440)) delete x.coffee;
     if ('noCoffee' in x && (x.noCoffee !== 1 || 'coffee' in x)) delete x.noCoffee;
+    // Von Dir als Schlaf markierte Wachstrecken (toggleWake) und Garmins Werte dazu (Sleep.applyFix)
+    if ('wfx' in x) {
+      x.wfx = (Array.isArray(x.wfx) ? x.wfx : []).filter((w) => Array.isArray(w) && Number.isInteger(w[0]) && Number.isInteger(w[1])
+        && w[0] >= 0 && w[1] > w[0] && w[1] <= 1440).map((w) => [w[0], w[1], w[2] ? 1 : 0]);
+      if (!x.wfx.length) delete x.wfx;
+    }
+    if ('gx' in x) {
+      if (!x.gx || typeof x.gx !== 'object' || Array.isArray(x.gx)) delete x.gx;
+      else for (const k of Object.keys(x.gx)) if (!Sleep.FIX_KEYS.includes(k)) delete x.gx[k];
+      // Markierung weg, Korrektur noch da: Garmins Werte zurück
+      if (x.gx && !x.wfx) Sleep.applyFix(x, null);
+    }
     if (!Object.keys(x).length) delete d.days[k];
   }
   d.acts = Array.isArray(d.acts) ? d.acts.filter((a) => a && a.id != null && typeof a.date === 'string') : [];
@@ -634,6 +646,9 @@ async function fillGaps(oldest, actMap) {
 
 function mergeRec(id, rec) {
   Core.mergeDay(db.days, rec, Core.FIELDS[id]);
+  // Frischer Schlaf von Garmin: Deine Korrektur der Nacht neu darauf rechnen
+  const x = db.days[rec.date];
+  if (id === 'sleep' && x && x.wfx) Sleep.applyFix(x, fixModel(), true);
   // Idealbereiche und Bedarf für heute Nacht gelten ab der neuesten Nacht —
   // beim Rückwärtsladen darf eine ältere sie nicht überschreiben
   if (rec.ref && (!db.profile.sleep || rec.date >= db.profile.sleep.date)) db.profile.sleep = Object.assign({ date: rec.date }, rec.ref);
@@ -716,6 +731,7 @@ async function sync(manual) {
   }
   if (!isConfigured()) { if (manual) openSettings(); return; }
   syncing = true; stopRequested = false;
+  fixModelC = undefined;
   setSyncUi();
   const t = Core.today();
   const oldest = Core.addDays(t, -(db.settings.history - 1));
@@ -1059,7 +1075,7 @@ function heroHtml(date, d) {
     <div class="gauge-wrap">${Charts.gauge(sc, { st })}
       <div class="gauge-val"><span class="num${fin(sc) ? '' : ' na'}">${fin(sc) ? countSpan(nf0.format(sc), sc) : '–'}</span></div></div>
     <div class="gauge-ends"><span>0</span><span>100</span></div>`;
-  if (fin(sc) && qw) h += `<div class="hero-q"><span class="pill st-${st}">${esc(qw)}</span></div>`;
+  if (fin(sc) && (qw || d.gx)) h += `<div class="hero-q">${qw ? `<span class="pill st-${st}">${esc(qw)}</span>` : ''}${fixPill(d)}</div>`;
   if (!has) return h + '<p class="hero-line">Für diese Nacht hat Garmin keinen Schlaf.</p></div>';
   if (!fin(sc)) h += '<p class="hero-line">Für diese Nacht gibt es keinen Score.</p>';
 
@@ -1434,7 +1450,7 @@ function nightStep(date, dir) {
 
 let nightDate = null;
 
-function openNight(date) {
+function openNight(date, scroll) {
   const d = db.days[date];
   if (!d || !fin(d.slp)) return;
   nightDate = date;
@@ -1461,6 +1477,7 @@ function openNight(date) {
         ${fin(d.awakeN) || fin(d.awake) ? `<span>${fin(d.awakeN) ? `${nf0.format(d.awakeN)}× aufgewacht` : 'wach'}${fin(d.awake) ? ` · <b>${esc(Core.fmtDur(d.awake))}</b> wach` : ''}</span>` : ''}</div>
     </div>
     ${fb || ins ? `<div class="sl-fb">${fb ? `<b>${esc(fb)}</b>` : ''}${ins ? `<span>${esc(ins)}</span>` : ''}</div>` : ''}
+    ${fixNoteHtml(d)}
   </div>`;
 
   // Phasen: Dauer, Anteil am Schlaf, Garmins Idealbereich, Dein Schnitt
@@ -1573,6 +1590,14 @@ function openNight(date) {
   $('#sheetBody').onclick = (e) => {
     const b = e.target.closest('[data-nstep]');
     if (b && b.dataset.nstep) { openNight(b.dataset.nstep); return; }
+    // Wachstrecke als Schlaf markieren: Nacht neu zeichnen, an derselben Stelle bleiben
+    const wb = e.target.closest('[data-wfx]');
+    if (wb) {
+      const top = $('#sheetBody').scrollTop;
+      toggleWake(date, wb.dataset.wfx);
+      openNight(date, top);
+      return;
+    }
     // Der Sprung zu den Trends läuft über den Klick-Handler der Seite — das Sheet muss dafür zu
     if (e.target.closest('[data-trend]')) closeSheet();
   };
@@ -1583,6 +1608,7 @@ function openNight(date) {
     const box = $('#nightCurves');
     if (!box || nightDate !== date || $('#sheet').classList.contains('hidden')) return;
     box.innerHTML = nightCurvesHtml(date, n);
+    if (scroll) $('#sheetBody').scrollTop = scroll;
     if (n && n.naps && n.naps.length && $('#nightNaps')) {
       $('#nightNaps').innerHTML = n.naps.map((x) => `<div class="qrow-1"><span>ab ${esc(Core.fmtClock(x.at))}</span><b class="num">${esc(Core.fmtDur(x.dur))}</b></div>`).join('');
     }
@@ -1737,52 +1763,121 @@ function nightCurvesHtml(date, n) {
 
 /** Wann Du wach gewesen sein könntest, wenn Garmin den Phasenverlauf nicht
     mitschickt (Sleep.wakeHints): Strecken mit erhöhtem Puls und Lücken
-    ohne Puls, gegen Garmins Summe der Wachzeit. */
+    ohne Puls, gegen Garmins Summe der Wachzeit. Strecken ab 6 min lassen
+    sich als Schlaf markieren (toggleWake), dann rechnet die App die Nacht
+    ohne sie. */
 function nightWakeHtml(date, n, g) {
-  const w = Sleep.wakeHints(n), d = db.days[date] || {};
+  const w = Sleep.wakeHints(n), d = db.days[date] || {}, gd = Sleep.garminNight(d);
   const xs = g.xs;
   const ups = (w && w.up) || [], gaps = (w && w.gaps) || [];
+  const fx = d.wfx || [];
+  const marked = (s) => fx.some(([a, b]) => s.a < b && s.b > a);
   const clock = (m) => Core.fmtClock(n.s0 + m);
   const mins = (m) => Core.fmtDur(m * 60);
-  const garmin = fin(d.awake) ? `Garmin: <b class="num">${esc(Core.fmtDur(d.awake))}</b> wach${fin(d.awakeN) ? `, ${nf0.format(d.awakeN)}× aufgewacht` : ''}` : '';
-  let h = `<div class="card"><div class="card-h">Wann wach?<span class="muted">aus dem Puls geschätzt</span></div>`;
+  const garmin = fin(gd.awake) ? `Garmin: <b class="num">${esc(Core.fmtDur(gd.awake))}</b> wach${fin(gd.awakeN) ? `, ${nf0.format(gd.awakeN)}× aufgewacht` : ''}` : '';
+  let h = `<div class="card" id="nightWake"><div class="card-h">Wann wach?<span class="muted">aus dem Puls geschätzt</span></div>`;
   if (garmin) h += `<p class="note" style="margin:0 0 var(--s1)">${garmin}. Wann genau, gibt Garmins Personal API nicht heraus.</p>`;
   if (!w || (!ups.length && !gaps.length)) {
     h += w && w.up
       ? '<p class="note">Im Puls nichts Auffälliges: Er lag die ganze Nacht nah an Deinem Schlafniveau, und die Uhr hat lückenlos gemessen.</p>'
       : '<p class="note">Für diese Nacht ist zu wenig Puls da.</p>';
+    if (fx.length) h += `<p class="note">Du hattest hier ${fx.length === 1 ? 'eine Strecke' : `${nf0.format(fx.length)} Strecken`} als Schlaf markiert. <button class="btn btn-sm" data-wfx="clear">Markierung aufheben</button></p>`;
     return h + '</div>';
   }
 
-  const segs = ups.map((s) => [n.s0 + s.a, n.s0 + s.b, 0]).concat(gaps.map((s) => [n.s0 + s.a, n.s0 + s.b, 1]));
+  // Als Schlaf markierte Strecken liegen in einer eigenen, blassen Bahn
+  const segs = ups.map((s) => [n.s0 + s.a, n.s0 + s.b, marked(s) ? 2 : 0])
+    .concat(gaps.map((s) => [n.s0 + s.a, n.s0 + s.b, marked(s) ? 2 : 1]));
+  const rows = [['erhöht', 'ph-awake'], ['Lücke', 'wk-gap']];
+  if (fx.length) rows.push(['Schlaf', 'wk-ok']);
   const reader = (i) => {
     const m = i * g.step;
     const u = ups.find((s) => m >= s.a - 2 && m <= s.b + 2), gp = gaps.find((s) => m >= s.a && m <= s.b);
-    const what = u ? `<b>Puls erhöht</b><span class="end mk-t">+${nf0.format(u.up)} · ${esc(clock(u.a))}–${esc(clock(u.b))}</span>`
-      : gp ? `<b>kein Puls</b><span class="end">${esc(clock(gp.a))}–${esc(clock(gp.b))}</span>`
+    const own = (u && marked(u)) || (gp && marked(gp)) ? ' · von Dir als Schlaf markiert' : '';
+    const what = u ? `<b>Puls erhöht</b><span class="end mk-t">+${nf0.format(u.up)} · ${esc(clock(u.a))}–${esc(clock(u.b))}${own}</span>`
+      : gp ? `<b>kein Puls</b><span class="end">${esc(clock(gp.a))}–${esc(clock(gp.b))}${own}</span>`
       : `<b>${fin(g.hr[i]) ? nf0.format(g.hr[i]) + ' bpm' : '–'}</b><span class="end">ruhig</span>`;
     return `<span>${esc(Core.fmtClock(xs[i]))}</span>${what}`;
   };
   const sum = [ups.length ? `erhöhter Puls <b>${esc(mins(w.upMin))}</b>` : '', gaps.length ? `ohne Puls <b>${esc(mins(w.gapMin))}</b>` : ''].filter(Boolean).join('<span>·</span>');
-  h += chartBox(Charts.lanes(xs, segs, [['erhöht', 'ph-awake'], ['Lücke', 'wk-gap']], { fmtX: Core.fmtClock }), reader, sum, 's');
+  h += chartBox(Charts.lanes(xs, segs, rows, { fmtX: Core.fmtClock }), reader, sum, 's');
 
-  // Liste nach Uhrzeit; kurze Spitzen (unter 6 min) nur gezählt, sie stehen unten bei den Pulsspitzen
-  const SHORT = 6;
-  const items = ups.filter((s) => s.dur >= SHORT).map((s) => [s.a, `${clock(s.a)}–${clock(s.b)}`,
-    `Puls +${nf0.format(s.up)}${s.edge === 'start' ? ' · beim Einschlafen' : s.edge === 'end' ? ' · beim Aufwachen' : ''}`, mins(s.dur), 'warn'])
-    .concat(gaps.map((s) => [s.a, `${clock(s.a)}–${clock(s.b)}`, 'kein Puls gemessen', mins(s.dur), '']))
-    .sort((x, y) => x[0] - y[0]);
+  // Liste nach Uhrzeit, je mit Knopf „Schlaf"; kurze Spitzen (unter 6 min) nur gezählt, sie stehen unten bei den Pulsspitzen
+  const SHORT = 6, edge = (s) => (s.a < Sleep.WAKE.edge || s.b > n.len - Sleep.WAKE.edge ? 1 : 0);
+  const items = ups.filter((s) => s.dur >= SHORT).map((s) => [s, `Puls +${nf0.format(s.up)}${s.edge === 'start' ? ' · beim Einschlafen' : s.edge === 'end' ? ' · beim Aufwachen' : ''}`, 'warn'])
+    .concat(gaps.map((s) => [s, 'kein Puls gemessen', '']))
+    .sort((x, y) => x[0].a - y[0].a);
   const short = ups.filter((s) => s.dur < SHORT);
-  if (items.length) h += `<div class="qrows np-rows">${items.map(([, t, sub, v, st]) => `<div><span>${esc(t)}<small>${esc(sub)}</small></span><b class="num${st ? ' st-' + st : ''}">${esc(v)}</b></div>`).join('')}</div>`;
+  if (items.length) {
+    h += `<div class="qrows np-rows wk-rows">${items.map(([s, sub, st]) => {
+      const on = marked(s);
+      return `<div><span>${esc(clock(s.a))}–${esc(clock(s.b))}<small>${esc(on ? 'von Dir als Schlaf markiert' : sub)}</small></span>`
+        + `<b class="num${on ? ' st-off' : st ? ' st-' + st : ''}">${esc(mins(s.dur))}</b>`
+        + `<button class="btn btn-sm${on ? ' on' : ''}" data-wfx="${s.a},${s.b},${edge(s)}" aria-pressed="${on}" aria-label="${on ? 'Wieder als wach zählen' : 'Als Schlaf zählen'}">Schlaf</button></div>`;
+    }).join('')}</div>`;
+  }
   if (short.length) h += `<p class="note">Dazu ${short.length === 1 ? 'eine kurze Pulsspitze' : `${nf0.format(short.length)} kurze Pulsspitzen`} (${short.map((s) => clock(s.a)).join(', ')}): kurz wach oder fast wach, meist ohne Erinnerung daran.</p>`;
 
   // Einordnung gegen Garmins Summe
-  const seen = (w.upMin || 0) + w.gapMin, aw = fin(d.awake) ? d.awake / 60 : null;
+  const seen = (w.upMin || 0) + w.gapMin, aw = fin(gd.awake) ? gd.awake / 60 : null;
   const notes = [];
+  if (items.length) notes.push('Weißt Du, dass Du in einer Strecke geschlafen hast, tipp auf „Schlaf“. Die App zieht sie von Garmins Wachzeit ab und rechnet den Score neu, überall mit dem Vermerk „korrigiert“. Nochmal tippen nimmt es zurück.');
   if (aw != null && aw >= 20 && seen < aw * 0.5) notes.push(`Von Garmins ${esc(mins(aw))} sieht man im Puls nur ${esc(mins(seen))}. Für den Rest stützt sich Garmin auf die Bewegung, die die Personal API nicht mitschickt: Umdrehen oder unruhiges Liegen kann dann als wach zählen, obwohl Du geschlafen hast.`);
   if (gaps.length) notes.push('In den Lücken hat die Uhr keinen Puls gemessen, meist weil das Band locker saß oder der Arm darauf lag. Was Garmin dort einträgt, ist geschätzt.');
   if (ups.some((s) => s.dur >= SHORT)) notes.push('Erhöhter Puls: mindestens 8 Schläge über Deinem Schlafniveau dieser Stunde. Liegst Du wach, steigt er meist um 10 und mehr.');
   return h + notes.map((t) => `<p class="note">${t}</p>`).join('') + '</div>';
+}
+
+/** Kennzeichen einer korrigierten Nacht: „korrigiert · Garmin 72". */
+function fixPill(d) {
+  if (!d || !d.gx) return '';
+  return `<span class="pill st-off">korrigiert${fin(d.gx.slpScore) && d.gx.slpScore !== d.slpScore ? ` · Garmin ${nf0.format(d.gx.slpScore)}` : ''}</span>`;
+}
+
+/** Was an einer korrigierten Nacht anders ist als bei Garmin und wie
+    sicher die Schätzung des Scores ist. */
+function fixNoteHtml(d) {
+  if (!d || !d.gx) return '';
+  const g = d.gx, m = fixModel();
+  const sec = fin(g.awake) && fin(d.awake) ? g.awake - d.awake : 0;
+  const marked = (d.wfx || []).reduce((s, [a, b]) => s + (b - a), 0) * 60;
+  const parts = [`<b>${esc(Core.fmtDur(sec))}</b> Wachzeit als Schlaf gezählt${marked > sec + 59 ? ` (markiert ${esc(Core.fmtDur(marked))}, mehr Wachzeit hat Garmin nicht)` : ''}`];
+  if (fin(g.awakeN) && g.awakeN !== d.awakeN) parts.push(`${nf0.format(g.awakeN - d.awakeN)}× weniger aufgewacht`);
+  let h = `<div class="hint fix-note">${ICON.info}<div class="grow"><strong>Korrigiert</strong><span>${parts.join(', ')} (von Dir unter „Wann wach?“ markiert).`;
+  if (fin(g.slpScore)) {
+    h += ` Garmins Score: ${nf0.format(g.slpScore)}`;
+    h += m && fin(d.slpScore) && d.slpScore !== g.slpScore
+      ? `. Neu geschätzt aus ${nf0.format(m.n)} Deiner Nächte, das Modell trifft Garmins Score im Mittel auf ± ${nf1.format(m.err)} Punkte.`
+      : m ? '. Am Score ändert das laut Deinen Nächten nichts Messbares.' : `. Für eine Schätzung des Scores braucht die App ${Sleep.FIX_MIN} Nächte, er bleibt bis dahin Garmins.`;
+  }
+  return h + '</span></div></div>';
+}
+
+/* Score-Modell für korrigierte Nächte (Sleep.scoreModel): einmal je Abgleich
+   bzw. Sitzung gerechnet, es hängt nur an Garmins Werten aller Nächte. */
+let fixModelC;
+function fixModel() {
+  if (fixModelC === undefined) fixModelC = Sleep.scoreModel(db.days);
+  return fixModelC;
+}
+
+/** Eine Strecke als Schlaf markieren oder die Markierung zurücknehmen
+    (überlappende alte Markierungen fallen weg, die Nacht kann sich beim
+    Neuladen leicht verschoben haben). 'clear' hebt alle auf. */
+function toggleWake(date, spec) {
+  const x = db.days[date];
+  if (!x) return;
+  let fx = x.wfx || [];
+  if (spec === 'clear') fx = [];
+  else {
+    const [a, b, e] = spec.split(',').map(Number);
+    if (!(b > a)) return;
+    const rest = fx.filter(([p, q]) => !(p < b && q > a));
+    fx = rest.length === fx.length ? rest.concat([[a, b, e ? 1 : 0]]).sort((p, q) => p[0] - q[0]) : rest;
+  }
+  if (fx.length) x.wfx = fx; else delete x.wfx;
+  Sleep.applyFix(x, fixModel());
+  save(); reindex(); render();
 }
 
 /** Was sich in dieser Nacht erkennen lässt: Pulsspitzen, ruhigste Strecke,
@@ -2067,9 +2162,12 @@ function renderTrends() {
   // Schlafsaldo: die Nulllinie heißt „Bedarf gedeckt"
   const goal = trendKey === 'steps' ? (db.days[t] || db.days[Core.addDays(t, -1)] || {}).stepGoal : trendKey === 'debt' ? 0 : null;
   const week = dates.length <= 10;
+  // Von Dir korrigierte Nächte (Wann wach?) beim Ablesen kennzeichnen
+  const fixKey = Sleep.FIX_KEYS.includes(trendKey) || ['deepPct', 'remPct', 'debt'].includes(trendKey);
   const reader = (i) => {
     const v = vals[i];
-    return `<span>${esc(dayLabel(dates[i]))}</span><b>${esc(Core.fmt(trendKey, v))}</b>`
+    const fixd = fixKey && fin(v) && (db.days[dates[i]] || {}).gx;
+    return `<span>${esc(dayLabel(dates[i]))}</span><b>${esc(Core.fmt(trendKey, v))}</b>${fixd ? '<span class="st-off">korrigiert</span>' : ''}`
       + (fin(avg[i]) && !week ? `<span class="end">Ø${m.sparse ? '' : ' 7 T'} ${esc(Core.fmt(trendKey, avg[i]))}</span>` : '');
   };
   let last = vals.length - 1;
