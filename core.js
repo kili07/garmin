@@ -551,11 +551,17 @@ const METRICS = {
   hrLow: { label: 'Pulstiefpunkt', group: 'Schlaf', unit: '%', dir: -1, minN: 7, hint: 'Wann in der Nacht Dein Puls am tiefsten war, in Prozent der Schlafzeit. Früh heißt meist: Der Körper kam schnell zur Ruhe' },
   hrv: { label: 'HRV', group: 'Erholung', unit: 'ms', dir: 1 },
   rhr: { label: 'Ruhepuls', group: 'Erholung', unit: 'bpm', dir: -1 },
+  hrMin: { label: 'Tiefster Puls', group: 'Erholung', unit: 'bpm', dir: -1, hint: 'Tiefster Wert des Tages, meist im Schlaf' },
   bbMax: { label: 'Body Battery', group: 'Erholung', dir: 1, hint: 'Höchstwert des Tages, meist am Morgen' },
+  bbMin: { label: 'Body Battery Tiefpunkt', group: 'Erholung', dir: 1, hint: 'Tiefster Wert des Tages, meist am Abend' },
   bbChg: { label: 'Body Battery geladen', group: 'Erholung', dir: 1 },
+  bbDrn: { label: 'Body Battery verbraucht', group: 'Erholung', dir: -1 },
   slpResp: { label: 'Atemfrequenz (Nacht)', group: 'Erholung', unit: '/min', dec: 1, dir: 0 },
+  resp: { label: 'Atemfrequenz (Tag)', group: 'Erholung', unit: '/min', dec: 1, dir: 0 },
   spo2: { label: 'SpO2', group: 'Erholung', unit: '%', dir: 1 },
   stress: { label: 'Stress', group: 'Alltag', dir: -1, hint: 'Tagesmittel, 0–100' },
+  stressMax: { label: 'Stressspitze', group: 'Alltag', dir: -1, hint: 'Höchster Stresswert des Tages, 0–100' },
+  hrMax: { label: 'Höchster Puls', group: 'Alltag', unit: 'bpm', dir: 0, hint: 'Höchster Wert des Tages, meist im Training' },
   steps: { label: 'Schritte', group: 'Alltag', dir: 1 },
   im: { label: 'Intensitätsminuten', group: 'Alltag', unit: 'min', dir: 1, agg: 'sum', hint: 'intensive Minuten zählen doppelt' },
   kcalAct: { label: 'Aktive Kalorien', group: 'Alltag', unit: 'kcal', dir: 1 },
@@ -567,6 +573,8 @@ const METRICS = {
   vo2: { label: 'VO2max', group: 'Training', dir: 1, sparse: true },
   weight: { label: 'Gewicht', group: 'Körper', unit: 'kg', dec: 1, dir: 0, sparse: true },
   fat: { label: 'Körperfett', group: 'Körper', unit: '%', dec: 1, dir: -1, sparse: true },
+  bmi: { label: 'BMI', group: 'Körper', dec: 1, dir: 0, sparse: true },
+  muscle: { label: 'Muskelmasse', group: 'Körper', unit: 'kg', dec: 1, dir: 1, sparse: true },
 };
 const GROUPS = ['Schlaf', 'Erholung', 'Alltag', 'Training', 'Körper'];
 

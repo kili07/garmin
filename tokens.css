@@ -1,10 +1,15 @@
 /* ═══════════════════════════════════════════════════════════════
-   Garmin-Übersicht — Designtokens
+   Garmin-Übersicht — Designtokens (3.0.0 „Messprotokoll")
 
    Die eine Stelle für Farben, Schrift, Maße und Bewegung. style.css und
    die Diagramme (über ihre Klassen) benutzen nur diese Variablen, ein
    Theme überschreibt nur sie. Beschrieben in CLAUDE.md: wer hier etwas
    ändert, zieht die Beschreibung dort mit.
+
+   Haltung seit 3.0.0: Die Oberfläche ist einfarbig — Indigo-Tinte bis
+   Weiß. Farbe gehört den Daten (Schlafphasen, Pulszonen, Sportarten,
+   Zustände), nicht der Verpackung. Struktur kommt aus Haarlinien und
+   ausgerichteten Ziffern, nicht aus gestapelten Flächen und Schatten.
 
    Aufbau:
    1. Schriften (liegen in fonts/, nachgeladen wird nichts)
@@ -16,7 +21,7 @@
 /* ── 1. Schriften ───────────────────────────────────────────── */
 /* Variable Schriften, nur lateinischer Zeichensatz (Deutsch passt hinein,
    seltene Zeichen wie → kommen aus der Systemschrift). Beide unter der
-   SIL Open Font License, Lizenztexte in fonts/. */
+   SIL Open Font License, Lizenztexte in licenses/. */
 @font-face{
   font-family:"Inter"; font-style:normal; font-weight:100 900; font-display:swap;
   src:url("fonts/inter-latin-wght-normal.woff2") format("woff2");
@@ -33,29 +38,32 @@
   --s-half:4px; --s1:8px; --s2:16px; --s3:24px; --s4:32px; --s5:40px; --s6:48px;
   --pad:16px;                    /* Seitenrand und Innenabstand der Karten */
 
-  --r-sm:8px;                    /* Felder, Zellen, kleine Flächen in Karten */
-  --r-card:16px;                 /* Karten */
-  --r-sheet:24px;                /* oberer Rand des Sheets */
-  --r-pill:999px;                /* Pills, Chips, Knöpfe, Segmente */
+  /* Radien: knapp. Ein Messgerät ist nicht abgerundet, eine Tablette schon.
+     999 px bleibt dem Schalter und dem Toast, nicht jedem Knopf. */
+  --r-sm:4px;                    /* Felder, Zellen, kleine Flächen */
+  --r-card:6px;                  /* Karten und Knöpfe */
+  --r-sheet:14px;                /* oberer Rand des Sheets */
+  --r-pill:999px;                /* nur Schalter, Toast, Punkte */
 
   /* Space Grotesk nur für Kennzahlen, Inter für alles andere */
   --font-ui:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --font-num:"Space Grotesk","Inter",system-ui,sans-serif;
-  --fs-hero:72px;                /* die eine Zahl im Hero */
-  --fs-big:48px;                 /* Kopfzahl einer Detailansicht */
-  --fs-card:30px;                /* Wert einer Metrik-Karte */
+  --fs-hero:56px;                /* die eine Zahl im Hero */
+  --fs-big:40px;                 /* Kopfzahl einer Detailansicht */
+  --fs-card:26px;                /* Wert einer Kennzahl im Messfeld */
   --fs-stat:20px;                /* Kennwerte in Reihen */
-  --fs-body:15px; --fs-small:13px; --fs-label:11px;
-  --w-num:600;
-  --track-label:.08em;           /* Laufweite der Großbuchstaben-Labels */
+  --fs-body:15px; --fs-small:13px; --fs-label:12px;
+  --w-num:500;                   /* gemessen, nicht geschrien */
+  --track-num:-.015em;           /* Ziffern leicht zusammengezogen */
+  --track-label:0;               /* Labels sind Satzschrift, nicht gesperrt */
 
-  /* Bewegung: ease-out, Gauges und Zähler in 600 ms. Die Zähler in app.js
-     rechnen mit derselben Kurve (1 − (1 − t)³). */
+  /* Bewegung: ease-out, Füllungen und Zähler in 600 ms. Die Zähler in
+     app.js rechnen mit derselben Kurve (1 − (1 − t)³). */
   --ease-out:cubic-bezier(.33,1,.68,1);
   --t-fast:.14s; --t-mid:.22s; --t-fill:.6s;
 
   /* Untere Leiste: deckt den sicheren Bereich (Home-Indikator) selbst mit ab */
-  --tab-h:64px;
+  --tab-h:60px;
   --tab-safe:env(safe-area-inset-bottom, 0px);
 
   /* Altnamen aus 1.x. Nur noch, damit älterer Code nicht bricht —
@@ -71,39 +79,46 @@
 :root,
 :root[data-theme="dark"]{
   color-scheme:dark;
-  /* Flächen: Grund, Karte eine Stufe heller, dann Mulden und gedrückt */
-  --bg:#0E1116; --surface:#171B22; --surface-2:#1D2129; --surface-3:#252A34;
-  --line:#232833;                /* 1px-Ränder statt Schatten */
-  --line-2:#2F3642;              /* Spur von Gauge und Balken, Trenner in Karten */
+  /* Flächen: Indigo-Tinte. Das Blatt hebt sich nur eine Spur ab — getragen
+     wird die Gliederung von den Linien, nicht von Helligkeitsstufen. */
+  --bg:#0A0C14; --surface:#11141F; --surface-2:#171B28; --surface-3:#1E2231;
+  --line:#1C2030;                /* 1px-Ränder statt Schatten */
+  --line-2:#2A3044;              /* Spur von Messbalken, Trenner in Karten */
 
-  --text:#EEF1F5; --text-2:#B6BDC9;
-  --muted:#8A93A3;               /* Labels; 5,6:1 auf der Karte */
+  --text:#E9EBF4; --text-2:#A8AEC4;
+  --muted:#767D96;               /* Labels; 4,9:1 auf dem Blatt */
 
-  /* Ein Akzent für Aktionen und Hervorhebungen */
-  --accent:#5EEAD4; --on-accent:#0E1116;
-  --accent-soft:rgba(94,234,212,.12); --accent-line:rgba(94,234,212,.4);
+  /* Ein Akzent: Periwinkle. Nur Aktion und aktiver Zustand — keine Deko,
+     und keine Zustandsbedeutung (die tragen die drei Zustände unten). */
+  --accent:#9BA0FF; --on-accent:#0A0C14;
+  --accent-soft:rgba(155,160,255,.14); --accent-line:rgba(155,160,255,.45);
 
-  /* Zustände: niedrig → mittel → hoch. Nie allein, immer mit Wort oder Zahl. */
+  /* Zustände: niedrig → mittel → hoch. Nie allein, immer mit Wort oder Zahl.
+     Alle drei unverändert aus 2.0.0 — sie sind mit dem Farbenblindheits-
+     Prüfer gerechnet, und der Akzent ist weit genug weg (ΔE > 36 auch bei
+     Rot-Grün-Schwäche), um Mint nicht verschieben zu müssen. */
   --st-low:#F8907F; --st-mid:#E8C586; --st-high:#5EEAD4;
   --st-low-soft:rgba(248,144,127,.14); --st-mid-soft:rgba(232,197,134,.14); --st-high-soft:rgba(94,234,212,.12);
-  --st-off:#8A93A3; --st-off-soft:rgba(138,147,163,.14);
+  --st-off:#767D96; --st-off-soft:rgba(118,125,150,.16);
 
-  --raised:#2C323D;              /* aktives Segment über der Mulde */
-  --knob:#EEF1F5;                /* Knopf im Schalter */
-  --scrim:rgba(5,7,10,.72);
+  --raised:#262C3D;              /* aktives Segment über der Mulde */
+  --knob:#E9EBF4;                /* Knopf im Schalter */
+  --scrim:rgba(4,5,11,.76);
 
-  /* Diagramme: Gitter und Achsen leise, die Linie im Akzent */
-  --grid:#232833; --ax:#8A93A3; --pt:#535B69;
-  --avg:#5EEAD4;
-  --area-op:.26;                 /* Deckkraft oben in der Verlaufsfläche, unten 0 */
-  --band:rgba(138,147,163,.12);
-  --bar:#5EEAD4; --bar-dim:#2F3642;
-  --goal:#8A93A3; --fit:#B6BDC9; --split:#2F3642;
-  --acute:#5EEAD4; --acute-soft:rgba(94,234,212,.16); --chronic:#B6BDC9;
+  /* Diagramme: Gitter und Achsen leise, die Hauptlinie im Akzent */
+  --grid:#1C2030; --ax:#767D96; --pt:#4C5370;
+  --avg:#9BA0FF;
+  --area-op:.22;                 /* Deckkraft oben in der Verlaufsfläche, unten 0 */
+  --band:rgba(118,125,150,.14);
+  --bar:#9BA0FF; --bar-dim:#262C3D;
+  --goal:#767D96; --fit:#A8AEC4; --split:#2A3044;
+  --acute:#9BA0FF; --acute-soft:rgba(155,160,255,.16); --chronic:#A8AEC4;
   /* Kurven der Nacht, je eine eigene Farbe */
-  --c-hr:#E07084; --c-hrv:#9F7ED6; --c-bb:#5EEAD4; --c-spo2:#4AA3D2;
+  --c-hr:#E07084; --c-hrv:#B088E8; --c-bb:#5EEAD4; --c-spo2:#4AA3D2;
   /* Schlafphasen (geprüft: Nachbarn auch bei Rot-Grün-Schwäche trennbar) */
   --ph-deep:#4F62C1; --ph-light:#3E9DCA; --ph-rem:#9550A9; --ph-awake:#CD7A4D;
+  /* Stress über den Tag: Ruhe → niedrig → mittel → hoch */
+  --sx-rest:#3E6E8E; --sx-low:#4F9A86; --sx-med:#D9A94F; --sx-high:#D96A5A;
   /* Pulszonen 1–5, zugleich die Stufen der Streckenfarbe */
   --z1:#6B7585; --z2:#407BC5; --z3:#2DA892; --z4:#B58A3A; --z5:#B24743;
   /* Sportarten (geprüft in der Reihenfolge der gestapelten Balken) */
@@ -116,27 +131,29 @@
 }
 
 /* ── 4. Hell ────────────────────────────────────────────────── */
+/* Dasselbe Blatt bei Tag: kühles Papier, Tinte statt Licht. */
 :root[data-theme="light"]{
   color-scheme:light;
-  --bg:#F4F6F8; --surface:#FFFFFF; --surface-2:#EDF0F4; --surface-3:#E4E8EE;
-  --line:#DFE3E9; --line-2:#CFD5DC;
-  --text:#13161C; --text-2:#474D58; --muted:#646C79;
-  --accent:#007A6D; --on-accent:#FFFFFF;
-  --accent-soft:rgba(0,122,109,.10); --accent-line:rgba(0,122,109,.4);
+  --bg:#F5F6FA; --surface:#FFFFFF; --surface-2:#EDEFF6; --surface-3:#E3E6F0;
+  --line:#E0E3EE; --line-2:#CBD0E0;
+  --text:#101320; --text-2:#454B61; --muted:#636A82;
+  --accent:#6134C9; --on-accent:#FFFFFF;
+  --accent-soft:rgba(97,52,201,.09); --accent-line:rgba(97,52,201,.4);
   --st-low:#B94739; --st-mid:#9C681A; --st-high:#007A6D;
   --st-low-soft:rgba(185,71,57,.10); --st-mid-soft:rgba(156,104,26,.12); --st-high-soft:rgba(0,122,109,.10);
-  --st-off:#646C79; --st-off-soft:rgba(100,108,121,.10);
+  --st-off:#636A82; --st-off-soft:rgba(99,106,130,.10);
   --raised:#FFFFFF; --knob:#FFFFFF;
-  --scrim:rgba(14,17,22,.4);
-  --grid:#E7EAEF; --ax:#646C79; --pt:#A8AEB8;
-  --avg:#007A6D;
-  --area-op:.16;
-  --band:rgba(100,108,121,.10);
-  --bar:#007A6D; --bar-dim:#CFD5DC;
-  --goal:#646C79; --fit:#474D58; --split:#CFD5DC;
-  --acute:#007A6D; --acute-soft:rgba(0,122,109,.14); --chronic:#474D58;
+  --scrim:rgba(16,19,32,.42);
+  --grid:#E6E9F1; --ax:#636A82; --pt:#A4AABC;
+  --avg:#6134C9;
+  --area-op:.14;
+  --band:rgba(99,106,130,.10);
+  --bar:#6134C9; --bar-dim:#CBD0E0;
+  --goal:#636A82; --fit:#454B61; --split:#CBD0E0;
+  --acute:#6134C9; --acute-soft:rgba(97,52,201,.13); --chronic:#454B61;
   --c-hr:#C2415B; --c-hrv:#7A55C2; --c-bb:#007A6D; --c-spo2:#1F7FB8;
   --ph-deep:#4657BD; --ph-light:#3E9DCA; --ph-rem:#8F4AA3; --ph-awake:#D87D4C;
+  --sx-rest:#39647F; --sx-low:#3F8571; --sx-med:#B08A2E; --sx-high:#9B3326;
   --z1:#9AA3B2; --z2:#3A75BF; --z3:#23A28C; --z4:#C5953B; --z5:#C34F4B;
   --sp-run:#C7692C; --sp-bike:#168DB2; --sp-swim:#3752AE; --sp-walk:#4A9A5E;
   --sp-strength:#8959BA; --sp-winter:#AC8F38; --sp-other:#9AA3B2;

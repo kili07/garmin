@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '3.0.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -289,7 +289,7 @@ function runAnims(root) {
   if (!root || reduceMotion() || document.hidden) return;
   root.classList.add('anim');
   setTimeout(() => root.classList.remove('anim'), ANIM_MS + 100);
-  $$('.gauge-fill, .meter > i', root).forEach((e) => e.classList.add('anim'));
+  $$('.meter > i, .rail > i', root).forEach((e) => e.classList.add('anim'));
   const items = $$('[data-count]', root).map((e) => ({ e, end: e.textContent, to: +e.dataset.count, dec: !!e.dataset.dec, hm: e.dataset.fmt === 'hm' }));
   if (!items.length) return;
   const show = (it, v) => {
@@ -1029,6 +1029,7 @@ function renderToday() {
   h += heroHtml(date, d);
   h += coffeeCard(date);
   h += verdictHtml(rd);
+  h += hrvCard(d);
   h += fitnessCard(date);
 
   // Metrik-Karten: Wert, Veränderung zum Vortag, die letzten sieben Tage
@@ -1044,6 +1045,8 @@ function renderToday() {
       <div class="grid2">${keys.map((k, i) => tile(k, date, keys.length % 2 === 1 && i === keys.length - 1)).join('')}</div>`;
   }
 
+  h += dayDetails(date, d);
+  h += bodyCard(date);
   h += weekTable(date);
 
   const recent = db.acts.filter((a) => !a.parent && a.date <= date).slice(0, 3);
@@ -1074,23 +1077,36 @@ function heroHtml(date, d) {
   const { st, word: qw } = sleepQual(d);
   const has = fin(d.slp);
   const span = fin(d.bed) && fin(d.wake) ? `${Core.fmtClock(d.bed)} – ${Core.fmtClock(d.wake)}` : '';
+  const need = fin(d.need) ? d.need * 60 : null;
   let h = `<${has ? `button class="card hero" data-night="${date}"` : 'div class="card hero"'}>
-    <div class="head"><span class="lbl">Schlafscore</span>${span ? `<span class="end">${esc(span)}</span>` : ''}${has ? ICON.chev : ''}</div>
-    <div class="gauge-wrap">${Charts.gauge(sc, { st })}
-      <div class="gauge-val"><span class="num${fin(sc) ? '' : ' na'}">${fin(sc) ? countSpan(nf0.format(sc), sc) : '–'}</span></div></div>
-    <div class="gauge-ends"><span>0</span><span>100</span></div>`;
-  if (fin(sc) && (qw || d.gx)) h += `<div class="hero-q">${qw ? `<span class="pill st-${st}">${esc(qw)}</span>` : ''}${fixPill(d)}</div>`;
+    <div class="head"><span class="lbl">Schlaf letzte Nacht</span>${span ? `<span class="end">${esc(span)}</span>` : ''}${has ? ICON.chev : ''}</div>
+    <div class="hero-top">
+      <div class="hero-score"><span class="num${fin(sc) ? '' : ' na'}">${fin(sc) ? countSpan(nf0.format(sc), sc) : '–'}</span>
+        <span class="hero-of">Score</span>
+        ${fin(sc) && (qw || d.gx) ? `<span class="hero-q">${qw ? `<span class="pill st-${st}">${esc(qw)}</span>` : ''}${fixPill(d)}</span>` : ''}</div>
+      ${has ? `<div class="hero-right"><b>${numHtml('slp', d.slp)}</b><span>${need ? 'Bedarf ' + esc(Core.fmtDur(need)) : 'geschlafen'}</span></div>` : ''}
+    </div>`;
+  // Der Score auf seiner Skala. Die drei Marken sind Garmins Grenzen:
+  // ab 60 mittel, ab 80 gut, ab 90 ausgezeichnet.
+  if (fin(sc)) {
+    h += `<div class="rail st-${st}"><i style="width:${Math.max(0, Math.min(100, sc)).toFixed(1)}%"></i>`
+      + '<u style="left:60%"></u><u style="left:80%"></u><u style="left:90%"></u></div>'
+      + '<div class="rail-ends"><span>0</span><span>60 · 80 · 90</span><span>100</span></div>';
+  }
   if (!has) return h + '<p class="hero-line">Für diese Nacht hat Garmin keinen Schlaf.</p></div>';
   if (!fin(sc)) h += '<p class="hero-line">Für diese Nacht gibt es keinen Score.</p>';
 
   // Kennwerte der Nacht, jeweils mit Deinem Schnitt der 30 Nächte davor
-  const need = fin(d.need) ? d.need * 60 : null;
   const hrAvg = nightMean(date, (x) => x.slpHr);
   const awAvg = nightMean(date, (x) => x.awakeN);
-  const cells = [['Dauer', numHtml('slp', d.slp), need ? `Bedarf ${Core.fmtDur(need)}` : '']];
+  const cells = [];
   if (fin(d.slpHr)) cells.push(['Puls', `${countSpan(nf0.format(d.slpHr), Math.round(d.slpHr))}<small>bpm</small>`, hrAvg != null ? `Ø ${nf0.format(hrAvg)}` : '']);
   if (fin(d.awakeN)) cells.push(['Aufgewacht', `${countSpan(nf0.format(d.awakeN), d.awakeN)}<small>×</small>`, awAvg != null ? `Ø ${nf1.format(awAvg)}` : '']);
-  h += `<div class="stats" style="grid-template-columns:repeat(${cells.length},minmax(0,1fr))">${cells.map(([l, v, sub]) => `<div><span class="lbl">${l}</span><span class="v">${v}</span>${sub ? `<span class="d">${esc(sub)}</span>` : ''}</div>`).join('')}</div>`;
+  if (fin(d.slpResp)) cells.push(['Atmung', `${countSpan(nf1.format(d.slpResp), Math.round(d.slpResp * 10) / 10, 1)}<small>/min</small>`,
+    fin(d.respLo) && fin(d.respHi) ? `${nf0.format(d.respLo)}–${nf0.format(d.respHi)}` : '']);
+  if (cells.length) {
+    h += `<div class="stats" style="grid-template-columns:repeat(${cells.length},minmax(0,1fr))">${cells.map(([l, v, sub]) => `<div><span class="lbl">${l}</span><span class="v">${v}</span>${sub ? `<span class="d">${esc(sub)}</span>` : ''}</div>`).join('')}</div>`;
+  }
 
   // Phasen als Streifen, darunter je Phase die Dauer (h:mm, damit die Spalten gleich lesen)
   const ph = [['deep', 'Tief'], ['light', 'Leicht'], ['rem', 'REM'], ['awake', 'Wach']].filter(([k]) => fin(d[k]) && d[k] > 0);
@@ -2023,6 +2039,133 @@ function tile(key, date, wide) {
 
 /** Die letzten sieben Tage als Tabelle — jede Zelle in der Farbe ihrer
     Abweichung vom Normalbereich dieses Tages. */
+/* ── Was Garmin sonst noch misst ────────────────────────────────
+   Die Personal API schickt je Tag mehr als die Kennzahlen oben: die
+   Pulsspanne, Garmins eigenen HRV-Status mit seinem Normalbereich, die
+   Verteilung des Stresses über den Tag, die Bilanz der Body Battery und
+   die Körpermaße der Waage. Bis 2.3.0 wurde das geholt und nicht gezeigt. */
+
+/** Spanne mit Marke: Grund ist min…max, der helle Streifen ein Bereich
+    darin (optional), die Marke der Wert. Alles in Prozent der Spanne. */
+function spanHtml(lo, hi, val, band, ends) {
+  if (!fin(lo) || !fin(hi) || hi <= lo) return '';
+  const p = (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+  let h = '<div class="span">';
+  if (band && fin(band[0]) && fin(band[1]) && band[1] > band[0]) {
+    h += `<i style="left:${p(band[0]).toFixed(1)}%; right:${(100 - p(band[1])).toFixed(1)}%"></i>`;
+  }
+  if (fin(val)) h += `<b style="left:${p(val).toFixed(1)}%"></b>`;
+  h += '</div>';
+  return h + `<div class="span-ends">${ends.map((e) => `<span>${esc(e)}</span>`).join('')}</div>`;
+}
+
+/** Puls über den Tag: tiefster Wert, Ruhepuls, höchster Wert. Garmin
+    liefert alle drei je Tag (hrMin, rhr, hrMax). Der helle Streifen ist
+    die Spanne des Tages auf einer festen Skala (40 bis Dein Maximalpuls) —
+    so sagt seine Länge etwas: ein Ruhetag ist ein kurzer Streifen, ein
+    Trainingstag ein langer. Die Marke darin ist der Ruhepuls. */
+function pulseCard(d) {
+  if (!fin(d.hrMin) || !fin(d.hrMax)) return '';
+  const top = Math.max(d.hrMax + 5, db.profile.maxHr || 0, 180);
+  const cells = [['Tiefster', d.hrMin], ['Ruhepuls', d.rhr], ['Höchster', d.hrMax]].filter(([, v]) => fin(v));
+  return `<div class="card"><div class="card-h">Puls über den Tag<span class="muted">bpm</span></div>
+    ${spanHtml(40, top, d.rhr, [d.hrMin, d.hrMax], ['40', `Spanne ${nf0.format(d.hrMin)}–${nf0.format(d.hrMax)}`, nf0.format(Math.round(top))])}
+    <div class="stats" style="grid-template-columns:repeat(${cells.length},minmax(0,1fr))">${cells.map(([l, v]) => `<div><span class="lbl">${l}</span><span class="v">${countSpan(nf0.format(v), Math.round(v))}<small>bpm</small></span></div>`).join('')}</div></div>`;
+}
+
+/* Garmins eigener HRV-Status. Er vergleicht die Nacht mit Deinem über
+   Wochen gebildeten Normalbereich (hrvLo…hrvHi) — eine zweite Meinung
+   neben dem Normalbereich, den die App selbst rechnet. */
+const HRV_ST = {
+  BALANCED: ['Ausgeglichen', 'good'], UNBALANCED: ['Unausgeglichen', 'warn'],
+  LOW: ['Niedrig', 'bad'], POOR: ['Schwach', 'bad'],
+};
+function hrvCard(d) {
+  if (!fin(d.hrv)) return '';
+  const st = HRV_ST[d.hrvSt];
+  const hasRange = fin(d.hrvLo) && fin(d.hrvHi) && d.hrvHi > d.hrvLo;
+  if (!st && !hasRange && !fin(d.hrvWeek) && !fin(d.hrv5)) return '';
+  // Die Spanne reicht über den Normalbereich hinaus, damit ein Wert
+  // darunter oder darüber nicht am Rand klebt
+  const pad = hasRange ? Math.max(6, (d.hrvHi - d.hrvLo) * 0.6) : 0;
+  const lo = hasRange ? Math.min(d.hrvLo - pad, d.hrv - 2) : 0;
+  const hi = hasRange ? Math.max(d.hrvHi + pad, d.hrv + 2) : 0;
+  const cells = [];
+  if (fin(d.hrvWeek)) cells.push(['Woche', `${countSpan(nf0.format(d.hrvWeek), Math.round(d.hrvWeek))}<small>ms</small>`, 'Mittel 7 Nächte']);
+  if (fin(d.hrv5)) cells.push(['Höchste 5 min', `${countSpan(nf0.format(d.hrv5), Math.round(d.hrv5))}<small>ms</small>`, 'in der Nacht']);
+  let h = `<div class="card"><div class="card-h">HRV laut Garmin<span class="muted">letzte Nacht</span></div>
+    <div class="hero-top"><div class="hero-score"><span class="num">${countSpan(nf0.format(d.hrv), Math.round(d.hrv))}</span><span class="hero-of">ms</span>
+      ${st ? `<span class="hero-q"><span class="pill st-${st[1]}">${esc(st[0])}</span></span>` : ''}</div></div>`;
+  if (hasRange) {
+    h += spanHtml(lo, hi, d.hrv, [d.hrvLo, d.hrvHi],
+      [nf0.format(Math.round(lo)), `Garmins Normalbereich ${nf0.format(d.hrvLo)}–${nf0.format(d.hrvHi)}`, nf0.format(Math.round(hi))]);
+  }
+  if (cells.length) {
+    h += `<div class="stats" style="grid-template-columns:repeat(${cells.length},minmax(0,1fr))">${cells.map(([l, v, sub]) => `<div><span class="lbl">${l}</span><span class="v">${v}</span><span class="d">${esc(sub)}</span></div>`).join('')}</div>`;
+  }
+  return h + '</div>';
+}
+
+/* Garmins Anteile am Tag (sRest …) sind in der Beschreibung nicht
+   eindeutig: Sie kommen als Anteil 0–1 oder als Sekunden. Gerechnet wird
+   deshalb immer der Anteil an der gemessenen Zeit — der stimmt in beiden
+   Fällen, und die Uhr wird ohnehin nicht 24 Stunden getragen. */
+const SX = [['rest', 'Ruhe', 'sRest'], ['low', 'Niedrig', 'sLow'], ['med', 'Mittel', 'sMed'], ['high', 'Hoch', 'sHigh']];
+function stressCard(d) {
+  const parts = SX.map(([k, l, f]) => ({ k, l, v: d[f] })).filter((p) => fin(p.v) && p.v > 0);
+  const sum = parts.reduce((s, p) => s + p.v, 0);
+  if (parts.length < 2 || sum <= 0) return '';
+  const secs = sum > 1.5;                        // dann sind es Sekunden, keine Anteile
+  const pct = (p) => (p.v / sum) * 100;
+  return `<div class="card"><div class="card-h">Stress über den Tag<span class="muted">${fin(d.stress) ? 'Ø ' + nf0.format(d.stress) : ''}${fin(d.stressMax) ? ' · Spitze ' + nf0.format(d.stressMax) : ''}</span></div>
+    <div class="split-bar">${parts.map((p) => `<i class="sx-${p.k}" style="width:${pct(p).toFixed(1)}%"></i>`).join('')}</div>
+    <div class="legend">${parts.map((p) => `<span><i class="sx-${p.k}"></i>${esc(p.l)} <b>${esc(nf0.format(pct(p)))} %</b>${secs ? ' · ' + esc(Core.fmtDur(p.v)) : ''}</span>`).join('')}</div>
+    <p class="note">Anteil der Zeit, in der die Uhr gemessen hat.</p></div>`;
+}
+
+/** Body Battery: Stand jetzt, Tiefpunkt und Höchststand des Tages, dazu
+    wie viel geladen und wie viel verbraucht wurde. */
+function batteryCard(d) {
+  if (!fin(d.bbMax) && !fin(d.bbNow)) return '';
+  const cells = [];
+  if (fin(d.bbChg)) cells.push(['Geladen', `+${countSpan(nf0.format(d.bbChg), Math.round(d.bbChg))}`, '']);
+  if (fin(d.bbDrn)) cells.push(['Verbraucht', `−${countSpan(nf0.format(d.bbDrn), Math.round(d.bbDrn))}`, '']);
+  if (fin(d.bbNow)) cells.push(['Jetzt', countSpan(nf0.format(d.bbNow), Math.round(d.bbNow)), '']);
+  let h = `<div class="card"><div class="card-h">Body Battery<span class="muted">0–100</span></div>`;
+  if (fin(d.bbMin) && fin(d.bbMax) && d.bbMax > d.bbMin) {
+    h += spanHtml(0, 100, d.bbNow, [d.bbMin, d.bbMax],
+      ['0', `Tiefpunkt ${nf0.format(d.bbMin)} · Höchststand ${nf0.format(d.bbMax)}`, '100']);
+  }
+  if (cells.length) {
+    h += `<div class="stats" style="grid-template-columns:repeat(${cells.length},minmax(0,1fr))">${cells.map(([l, v]) => `<div><span class="lbl">${l}</span><span class="v">${v}</span></div>`).join('')}</div>`;
+  }
+  return h + '</div>';
+}
+
+/** Körpermaße der Waage. Gewicht und Fett stehen schon oben im Messfeld;
+    BMI und Muskelmasse holt die App, zeigte sie aber bis 2.3.0 nirgends. */
+function bodyCard(date) {
+  // Die Waage liefert nicht täglich: die letzte Messung bis zu diesem Tag
+  let d = null, when = null;
+  for (let i = 0; i <= 93 && !d; i++) {
+    const k = Core.addDays(date, -i), x = db.days[k];
+    if (x && (fin(x.bmi) || fin(x.muscle))) { d = x; when = k; }
+  }
+  if (!d) return '';
+  const cells = [['Gewicht', 'weight', 'kg'], ['Körperfett', 'fat', '%'], ['BMI', 'bmi', ''], ['Muskeln', 'muscle', 'kg']]
+    .filter(([, k]) => fin(d[k]));
+  if (!cells.length) return '';
+  return `<div class="sec-h">Körper<span class="muted">${esc(when === date ? 'heute gewogen' : dayLabel(when))}</span></div>
+    <div class="card"><div class="stats" style="grid-template-columns:repeat(${cells.length},minmax(0,1fr))">${cells.map(([l, k, u]) => `<div><span class="lbl">${l}</span><span class="v">${countSpan(nf1.format(d[k]), Math.round(d[k] * 10) / 10, 1)}${u ? `<small>${u}</small>` : ''}</span></div>`).join('')}</div></div>`;
+}
+
+/** Alle Tagesmessungen, die nicht ins Messfeld passen, in einem Abschnitt. */
+function dayDetails(date, d) {
+  const cards = [pulseCard(d), stressCard(d), batteryCard(d)].filter(Boolean);
+  if (!cards.length) return '';
+  return '<div class="sec-h">Gemessen am Tag<span class="muted">laut Garmin</span></div>' + cards.join('');
+}
+
 function weekTable(date) {
   const cols = [
     ['slp', 'Schlaf', (v) => splitVal('slp', v).join(' ').replace(' h', '').replace(' min', '′')],

@@ -167,32 +167,6 @@ function yAxis(yt, y, x0, x1, fmtY) {
     + `<text class="ax" x="${x0 - 6}" y="${r1(y(v)) + 3}" text-anchor="end">${esc(fmtY(v))}</text>`).join('');
 }
 
-/* ── Halbkreis ──────────────────────────────────────────────── */
-/** Gauge von 0 bis o.max (100) als oberer Halbkreis. Nur die Bögen; Zahl
-    und Wort setzt app.js als HTML darüber, damit sie aus CSS ihre Schrift
-    bekommen. o.st: Zustand (good, ok, warn, bad) — er färbt den Bogen.
-    Der Verlauf läuft vom blassen Anfang bis zur Spitze des Bogens, auch
-    bei kleinen Werten endet er also kräftig. */
-function gauge(v, o) {
-  o = o || {};
-  const max = o.max || 100, w = 248, sw = 14;
-  const r = (w - sw) / 2, cx = w / 2, cy = r + sw / 2, h = Math.ceil(cy + sw / 2);
-  const p = fin(v) ? Math.max(0, Math.min(1, v / max)) : 0;
-  const len = Math.PI * r;
-  const d = `M${sw / 2} ${cy}A${r} ${r} 0 0 1 ${w - sw / 2} ${cy}`;
-  const tip = cx - r * Math.cos(Math.PI * p);
-  const id = 'gg' + (++gid);
-  let s = `<svg class="gauge st-${esc(o.st || 'off')}" viewBox="0 0 ${w} ${h}" aria-hidden="true">`
-    + `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${sw / 2}" y1="0" x2="${r1(Math.max(sw, tip + sw / 2))}" y2="0">`
-    + '<stop offset="0" class="gs0"/><stop offset="1" class="gs1"/></linearGradient></defs>'
-    + `<path class="gauge-track" d="${d}"/>`;
-  if (p > 0) {
-    s += `<path class="gauge-fill" d="${d}" stroke="url(#${id})" style="--len:${r1(len)}"`
-      + ` stroke-dasharray="${r1(len)}" stroke-dashoffset="${r1(len * (1 - p))}"/>`;
-  }
-  return s + '</svg>';
-}
-
 /* ── Sparkline ──────────────────────────────────────────────── */
 /** Kleine Linie für Metrik-Karten, meist die letzten sieben Tage. Linie
     leise, der letzte Punkt in der Farbe seines Zustands (o.st). o.band =
@@ -504,7 +478,7 @@ function weekdays(vals, o) {
   return s + '</svg>';
 }
 
-return { gauge, spark, trend, bars, scatter, load, track, curve, lanes, hypno, weekdays, ticks, dateTicks, esc };
+return { spark, trend, bars, scatter, load, track, curve, lanes, hypno, weekdays, ticks, dateTicks, esc };
 })();
 
 if (typeof module === 'object' && module.exports) module.exports = Charts;

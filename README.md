@@ -4,18 +4,21 @@ Deine Garmin-Daten auf einen Blick, besser sortiert als in Garmin Connect: **Wie
 **lange Trends über Monate und Jahre** und **welche Gewohnheiten bei Dir was bewirken**.
 
 Reines HTML, CSS und JavaScript nach der Bauanleitung (`PWA-ANLEITUNG.md`): kein Build, keine Abhängigkeiten,
-installierbar als Web-App, offline lesbar. Seit 2.0.0 ein dunkles, ruhiges Dashboard fürs Handy: die Zahlen groß in
-Space Grotesk, alles andere in Inter, ein Akzent in Mint, Zustände von Koralle über Sand bis Mint. Schriften und
-Icons (Lucide) liegen in der App, nachgeladen wird nichts. Das Designsystem steht in `CLAUDE.md`, die Werte in
-`tokens.css`. Die Daten holt die App über Garmins offizielle **Personal API** mit Deinem
+installierbar als Web-App, offline lesbar. Seit 3.0.0 ein dunkles, ruhiges Messprotokoll fürs Handy: Grund und
+Flächen laufen einfarbig von Indigo-Tinte bis Weiß, Farbe gehört den Daten. Gegliedert wird mit Haarlinien statt
+mit gestapelten Flächen, Ziffern stehen in Spalten. Die Zahlen in Space Grotesk, alles andere in Inter, ein Akzent
+in Periwinkle, Zustände von Koralle über Sand bis Mint. Schriften und Icons (Lucide) liegen in der App,
+nachgeladen wird nichts. Das Designsystem steht in `CLAUDE.md`, die Werte in `tokens.css`. Die Daten holt die App über Garmins offizielle **Personal API** mit Deinem
 eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das über einen kleinen eigenen Proxy
 (Cloudflare Worker, kostenlos). Warum, steht in `DECISIONS.md`.
 
 ## Was sie kann
 
 **Heute**
-- **Schlafscore** der letzten Nacht groß in einem Halbkreis, in der Farbe von Garmins Einordnung (gut, mittel,
-  schwach), darunter Dauer gegen Bedarf, Puls und Aufwachen gegen Deinen Schnitt und die Phasen als Streifen.
+- **Schlafscore** der letzten Nacht groß als Zahl mit Garmins Wort daneben (gut, mittel, schwach), darunter der
+  Score auf seiner Skala mit Garmins Grenzen bei 60, 80 und 90 — man sieht also, wie weit es bis zur nächsten
+  Stufe ist. Rechts Dauer gegen Bedarf, darunter Puls, Aufwachen und Atmung gegen Deinen Schnitt und die
+  Zusammensetzung der Nacht als Streifen.
 - **Erholung:** HRV, Ruhepuls, Schlaf, Belastung und Body Battery, jedes Signal gegen *Deinen eigenen*
   Normalbereich der letzten Wochen, dazu eine Einschätzung in einem Satz. Garmins „Training Readiness“ gibt die
   API nicht her; die App zeigt stattdessen offen, woraus sich so ein Wert zusammensetzt.
@@ -50,14 +53,23 @@ eigenen API-Schlüssel. Weil Garmin Aufrufe aus dem Browser ablehnt, läuft das 
   Mit ‹ › geht es Nacht für Nacht zurück. Den Verlauf der Phasen über die Nacht (das Balkendiagramm aus Garmin
   Connect) gibt die Personal API laut Beschreibung nicht her, Garmins eigene „unruhige Momente“ (aus der Bewegung)
   ebenso wenig. Schickt Garmin sie doch mit, zeigt die App sie.
-- **Kennzahlen** als Karten für HRV, Ruhepuls, Body Battery, Stress, Schritte, Intensitätsminuten (Woche), Belastung
-  (7 Tage), VO2max, Gewicht, Atmung und SpO2. Jede mit Wert, der Veränderung zum Vortag als Pill (Mint besser,
+- **Kennzahlen** in einem Messfeld — einem Raster aus Haarlinien — für HRV, Ruhepuls, Body Battery, Stress,
+  Schritte, Intensitätsminuten (Woche), Belastung (7 Tage), VO2max, Gewicht, Atmung und SpO2. Jede mit Wert,
+  der Veränderung zum Vortag als Pill (Mint besser,
   Koralle schlechter, grau ohne Richtung oder im Rauschen) und den letzten sieben Tagen als kleine Linie mit Deinem
   Normalbereich als Band; der letzte Punkt zeigt die Lage zum Normalbereich. Antippen öffnet den Trend.
 - **Letzter Kaffee:** Unter dem Schlafscore trägst Du ein, wann Du zuletzt Kaffee getrunken hast. Heute reicht
   ein Tipp auf „Jetzt“ bei jeder Tasse, es zählt die letzte. Antippen der Karte öffnet die Eingabe mit Uhrzeit,
   „Kein Kaffee“ und den letzten sieben Tagen zum Nachtragen. Für vergangene Tage steht dabei, wie lange die Tasse
   vor dem Einschlafen lag. Garmin weiß davon nichts, der Eintrag bleibt auf dem Gerät und kommt ins Backup.
+- **HRV laut Garmin** (seit 3.0.0): Garmins eigener Status zur Nacht (ausgeglichen, unausgeglichen, niedrig) und
+  sein über Wochen gebildeter Normalbereich als Streifen, die Nacht als Marke darin, dazu Wochenmittel und
+  höchster 5-Minuten-Wert. Das ist eine zweite Meinung neben dem Normalbereich, den die App selbst rechnet.
+- **Gemessen am Tag** (seit 3.0.0): **Puls über den Tag** (tiefster Wert, Ruhepuls, höchster Wert; die Spanne als
+  Streifen auf fester Skala, so dass seine Länge etwas sagt — Ruhetag kurz, Trainingstag lang),
+  **Stress über den Tag** (Anteile in Ruhe, niedrigem, mittlerem und hohem Stress als Streifen, dazu die Spitze)
+  und **Body Battery** (Tiefpunkt bis Höchststand, Stand jetzt, geladen und verbraucht).
+- **Körper** (seit 3.0.0): Gewicht, Körperfett, BMI und Muskelmasse der letzten Wägung.
 - **Woche auf einen Blick:** sieben Tage × sechs Werte als Tabelle, jede Zelle in der Farbe ihrer Abweichung.
 - Mit ‹ › durch frühere Tage blättern.
 
