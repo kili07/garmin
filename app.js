@@ -26,7 +26,7 @@
 const KEY = 'garmin.v1';
 /* Bei jeder Änderung hochzählen — wird in den Einstellungen angezeigt, damit
    sich auf dem Handy prüfen lässt, welche Fassung wirklich läuft. */
-const APP_VERSION = '3.0.1';
+const APP_VERSION = '4.0.0';
 
 const THEME_KEY = 'garmin.theme';
 /* Schlüssel und Token liegen getrennt vom Datensatz: So landen sie nie in
@@ -42,8 +42,8 @@ const CF_PAGE = 'https://dash.cloudflare.com/';
    <meta name="theme-color">, damit die Systemleiste des Handys mitzieht —
    muss mit --bg in tokens.css übereinstimmen. */
 const THEMES = {
-  dark: { label: 'Dunkel', bar: '#0E1116' },
-  light: { label: 'Hell', bar: '#F4F6F8' },
+  dark: { label: 'Dunkel', bar: '#0E130E' },
+  light: { label: 'Hell', bar: '#D3DACD' },
 };
 
 /** Frische Grundstruktur. Basis beim Laden und beim Backup-Import, damit
@@ -79,7 +79,7 @@ const blank = () => ({
     born: null,         // Jahrgang — nur für die VO2max-Tabelle im Fitness-Score
     sex: '',            // 'm', 'f' oder '' (offen), ebenso
   },
-  theme: 'dark',
+  theme: 'light',
   setup: false,         // erster Abgleich gelungen?
   lastBackup: null,
 });

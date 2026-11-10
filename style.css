@@ -743,12 +743,87 @@ table.pf-t{width:100%; border-collapse:collapse; margin-top:var(--s2); font-size
 @keyframes grow-x{from{transform:scaleX(0)}}
 .view.anim .chart-svg .ln-avg,.view.anim .chart-svg .area,.view.anim .chart-svg .end-dot{animation:fade var(--t-fill) var(--ease-out) both}
 
+/* ── 12. Radcomputer (4.0.0) ────────────────────────────────── */
+/* Die Anzeige eines Radcomputers über alle Ansichten: jedes Feld hat einen
+   harten Rahmen in --ink, keine Rundung, Ziffern schmal und fett. Der
+   Hauptwert (Hero) ist invertiert. Steht am Ende, damit diese Regeln die
+   Grundbausteine oben verlässlich überschreiben. */
+.num,.stat-v,.wk td,.facts b,.vs b,.mval .num,.hero-score .num,.stats .v,.sig b,.hero-right b,.np-h b{
+  font-stretch:var(--stretch-num); font-weight:var(--w-num)
+}
+.hero-score .num{line-height:.86}
+.mval .num{line-height:.95}
+.lbl,.card-h,.stat-l,.row-h,.pf-lead{font-weight:500; color:var(--text-2)}
+
+.topbar{border-bottom:var(--bw) solid var(--ink)}
+.topbar h1{font-weight:600}
+
+.card{border:var(--bw) solid var(--ink); border-radius:0; background:var(--surface)}
+.card + .card{margin-top:var(--s1)}
+button.card:active,button.mcard:active,.tile:active{background:var(--surface-2)}
+
+/* Hauptwert invertiert: die Tokens lokal umdrehen, alle Bausteine darin
+   ziehen mit, ohne eigene Farben zu kennen. */
+.card.hero{
+  background:var(--inv-bg); color:var(--inv-text); border-color:var(--inv-bg);
+  --text:var(--inv-text); --text-2:var(--inv-text-2); --muted:var(--inv-text-2);
+  --line:var(--inv-line); --line-2:var(--inv-line); --ink:var(--inv-text);
+  --accent:var(--inv-text);
+}
+button.card.hero:active{background:var(--inv-bg); filter:brightness(.92)}
+.card.hero .pill{border-color:var(--inv-text-2); color:var(--inv-text)}
+
+/* Messfelder im Raster: Rahmen statt Haarlinien, wie die Felder im Display */
+.grid2{gap:0; background:none; border:var(--bw) solid var(--ink); border-radius:0}
+.grid2 > .mcard{border-right:var(--bw) solid var(--ink); border-bottom:var(--bw) solid var(--ink); background:var(--surface); margin:0 0 calc(-1 * var(--bw)) 0}
+.grid2 > .mcard:nth-child(2n){border-right:0}
+.grid2 > .mcard:last-child:nth-child(odd){border-right:0}
+.stats{border-top:var(--bw) solid var(--ink)}
+.sigs{border-top:var(--bw) solid var(--ink)}
+
+/* Untere Leiste: vier Felder mit Rahmen, aktives Feld invertiert */
+.tabbar{border-top:var(--bw) solid var(--ink); background:var(--bg); gap:0}
+.tabbar button{font:600 13px/16px var(--font-ui); color:var(--text)}
+.tabbar button + button{border-left:var(--bw) solid var(--ink)}
+.tabbar button.on{background:var(--ink); color:var(--bg)}
+.tabbar button.on::before{display:none}
+
+/* Bedienelemente: eckig, Rahmen in Tinte, aktive Wahl invertiert */
+.btn{border-radius:0; border:var(--bw) solid var(--ink); background:transparent; font-weight:600}
+.btn:active{background:var(--surface-2)}
+.btn-primary{background:var(--ink); color:var(--bg); border-color:var(--ink)}
+.btn-primary:active{background:var(--ink)}
+.btn-danger{background:var(--st-low); color:var(--bg); border-color:var(--st-low)}
+.btn.on{background:var(--ink); color:var(--bg); border-color:var(--ink)}
+.icon-btn{border-radius:0}
+.pill{border-radius:0}
+.chip{border-radius:0; border:var(--bw) solid var(--ink); color:var(--text)}
+.chip.on{background:var(--ink); color:var(--bg); border-color:var(--ink)}
+.seg{border:var(--bw) solid var(--ink); border-radius:0; background:transparent}
+.seg button + button{border-left:var(--bw) solid var(--ink)}
+.seg button.on{background:var(--raised); color:var(--on-raised)}
+.switch{border-radius:0; background:var(--surface-3); border:var(--bw) solid var(--ink)}
+.switch::after{border-radius:0; top:1px; left:1px; background:var(--ink)}
+.switch[aria-checked="true"]{background:var(--ink)}
+.switch[aria-checked="true"]::after{background:var(--bg)}
+input[type="text"],input[type="url"],input[type="password"],input[type="number"],input[type="time"],input:not([type]),select{
+  border-radius:0; border:var(--bw) solid var(--ink); background:var(--surface)
+}
+.sheet{border-radius:0; border-top:var(--bw) solid var(--ink)}
+.sheet-grip{display:none}
+.sheet-head{border-bottom:var(--bw) solid var(--ink)}
+.toast{border-radius:0}
+.hint{border-radius:0; border:var(--bw) solid var(--ink); background:transparent}
+.meter{height:8px; border-radius:0; background:transparent; border:1.5px solid var(--ink)}
+.meter > i{border-radius:0; background:var(--ink)}
+.rail > i,.split-bar,.split-bar i,.span > i{border-radius:0}
+
 /* ── Breitere Bildschirme ───────────────────────────────────── */
 @media(min-width:560px){
   main,.topbar{max-width:640px; margin-left:auto; margin-right:auto}
   .grid2{grid-template-columns:repeat(3, minmax(0,1fr))}
   .grid2 > .mcard:last-child:nth-child(odd){grid-column:auto}
-  .tabbar{left:50%; right:auto; transform:translateX(-50%); width:100%; max-width:640px; border:1px solid var(--line); border-bottom:0}
+  .tabbar{left:50%; right:auto; transform:translateX(-50%); width:100%; max-width:640px; border:var(--bw) solid var(--ink); border-bottom:0}
   .sheet{max-width:640px; margin:0 auto}
 }
 @media(prefers-reduced-motion:reduce){

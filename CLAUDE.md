@@ -4,32 +4,30 @@ Vorrang hat `PWA-ANLEITUNG.md` (Stack, harte Regeln, Upload). Entscheidungen ste
 Punkte in `OFFEN.md`. Diese Datei beschreibt das **Designsystem** (seit 2.0.0). Es gilt für jede Änderung am
 Aussehen.
 
-## Richtung
+## Richtung (4.0.0 „Radcomputer")
 
-Dunkles, datenfokussiertes Health-Dashboard, zuerst fürs Handy. Ruhig, technisch, hochwertig. Wenig Deko, die
-Daten sind der Star. Keine Logos, Markennamen oder Designs anderer Apps; Garmin erscheint nur im Text als
+Die Anzeige eines Radcomputers, zuerst fürs Handy. Graugrünes LCD-Feld, schwarze Ziffern, schmale fette
+Anzeigeziffern (Saira, `font-stretch` 62 %), harte 2-px-Rahmen in `--ink`, keine Rundung. Merkmal: der Hauptwert
+(Hero) ist invertiert. Hell ist der Standard (LCD bei Tag), dunkel ist das beleuchtete Display bei Nacht. Farbe
+gehört nur den Daten. Keine Logos, Markennamen oder Designs anderer Apps; Garmin erscheint nur im Text als
 Datenquelle.
 
 ## Tokens
 
 Alle Werte stehen in **`tokens.css`**, der einzigen Quelle. `style.css` und die Diagramme (über ihre Klassen)
-benutzen nur diese Variablen. Feste Farben in Komponenten sind verboten. Wer eine neue Farbe braucht, legt ein
-Token an und bedient beide Themes (dunkel ist Standard, hell zieht mit). Änderst Du `tokens.css`, ziehst Du diese
-Tabelle mit.
+benutzen nur diese Variablen. Feste Farben in Komponenten sind verboten. Neue Farbe → neues Token in beiden Themes.
+Die Radcomputer-Regeln stehen gesammelt am Ende von `style.css` (Abschnitt 12).
 
-| Rolle | Token | Dunkel | Hell |
+| Rolle | Token | Hell (Standard) | Dunkel |
 |---|---|---|---|
-| Grund | `--bg` | `#0E1116` | `#F4F6F8` |
-| Karte | `--surface` | `#171B22` | `#FFFFFF` |
-| Mulde, gedrückt | `--surface-2` / `--surface-3` | `#1D2129` / `#252A34` | `#EDF0F4` / `#E4E8EE` |
-| Rand (1px, statt Schatten) | `--line` | `#232833` | `#DFE3E9` |
-| Spur, Trenner | `--line-2` | `#2F3642` | `#CFD5DC` |
-| Text | `--text` / `--text-2` | `#EEF1F5` / `#B6BDC9` | `#13161C` / `#474D58` |
-| Labels | `--muted` | `#8A93A3` | `#646C79` |
-| Akzent | `--accent` (Text darauf `--on-accent`) | `#5EEAD4` (`#0E1116`) | `#007A6D` (`#FFFFFF`) |
-| Zustand niedrig | `--st-low` | Koralle `#F8907F` | `#B94739` |
-| Zustand mittel | `--st-mid` | Sand `#E8C586` | `#9C681A` |
-| Zustand hoch | `--st-high` | Mint `#5EEAD4` | `#007A6D` |
+| Grund, Feld | `--bg` / `--surface` | `#D3DACD` | `#0E130E` |
+| Gedrückt, Mulde | `--surface-2` / `--surface-3` | `#C5CEBF` / `#B8C2B1` | `#182018` / `#212B21` |
+| Rahmen der Felder | `--ink` | `#131A13` | `#CFDCC8` |
+| Feine Trenner | `--line` / `--line-2` | `#A9B4A3` / `#9AA694` | `#2C382C` / `#3A483A` |
+| Text | `--text` / `--text-2` / `--muted` | `#131A13` / `#2F3A2F` / `#3C473C` | `#E2EADD` / `#B5C2AE` / `#93A18C` |
+| Invertiertes Feld | `--inv-bg` / `--inv-text` | `#131A13` / `#D3DACD` | `#CFDCC8` / `#0E130E` |
+| Akzent = Tinte | `--accent` | `#131A13` | `#CFDCC8` |
+| Zustände | `--st-low` / `--st-mid` / `--st-high` | `#9A2E22` / `#7A4F00` / `#0B5E48` | `#F29A86` / `#E5C680` / `#7FD8B4` |
 
 Dazu je Zustand eine blasse Fläche (`--st-low-soft` …), Diagramm-Tokens (`--grid`, `--ax`, `--pt`, `--avg`,
 `--area-op` für die Deckkraft der Verlaufsfläche, `--band`, `--bar`, `--bar-dim`), Schlafphasen (`--ph-*`),
@@ -43,11 +41,11 @@ Maße und Schrift, themenunabhängig:
 |---|---|---|
 | Raster | `--s1` … `--s6` | 8, 16, 24, 32, 40, 48 px; `--s-half` 4 px nur innerhalb kleiner Bausteine |
 | Seitenrand, Karten-Innenabstand | `--pad` | 16 px |
-| Radien | `--r-card` / `--r-pill` / `--r-sm` / `--r-sheet` | 16 / 999 / 8 / 24 px |
-| Kennzahlen | `--font-num` | Space Grotesk 600, `tabular-nums` |
-| Alles andere | `--font-ui` | Inter |
-| Zahlengrößen | `--fs-hero` / `--fs-big` / `--fs-card` / `--fs-stat` | 72 / 48 / 30 / 20 px |
-| Text | `--fs-body` / `--fs-small` / `--fs-label` | 15 / 13 / 11 px |
+| Radien | `--r-card` / `--r-sm` / `--r-sheet` | 0 px; `--r-pill` 999 px nur für Punkte; Rahmen `--bw` 2 px |
+| Kennzahlen | `--font-num` | Saira 800, `font-stretch:var(--stretch-num)`, `tabular-nums` |
+| Alles andere | `--font-ui` | Saira |
+| Zahlengrößen | `--fs-hero` / `--fs-big` / `--fs-card` / `--fs-stat` | 96 / 64 / 44 / 26 px |
+| Text | `--fs-body` / `--fs-small` / `--fs-label` | 15 / 14 / 13 px |
 | Bewegung | `--ease-out`, `--t-fill` | `cubic-bezier(.33,1,.68,1)`, 600 ms |
 
 Die alten Namen aus 1.x (`--sp-1` … `--sp-6`, `--up`, `--down`, `--warn`, `--r`, `--r-lg` …) sind in `tokens.css`
@@ -55,10 +53,10 @@ nur noch Aliasse. Neue Bausteine nehmen die neuen Namen.
 
 ## Regeln
 
-- **Labels** klein, Großbuchstaben, Laufweite 0,08 em, `--muted`: Klasse `.lbl`.
-- **Kennzahlen** immer in `--font-num` mit `tabular-nums` (Klasse `.num`), Einheit klein in Inter daneben.
-- **Karten**: `--surface`, 1px `--line`, Radius 16 px, kein Schatten. Abstände nur aus dem 8er-Raster.
-- **Akzent** (ein Mint) nur für primäre Aktionen, den aktiven Zustand (Tab, Segment, Chip) und die Hauptlinie
+- **Labels** klein, normale Schreibweise, `--text-2`: Klasse `.lbl`.
+- **Kennzahlen** immer in `--font-num` mit `tabular-nums` (Klasse `.num`), Einheit klein daneben.
+- **Karten**: Anzeigefelder, `--surface`, Rahmen `--bw` in `--ink`, keine Rundung, kein Schatten. Abstände nur aus dem 8er-Raster.
+- **Akzent** (die Tinte, aktive Wahl invertiert) nur für primäre Aktionen, den aktiven Zustand (Tab, Segment, Chip) und die Hauptlinie
   eines Diagramms. Nicht als Dekoration.
 - **Zustände** über die Skala Koralle → Sand → Mint. Die Klassen `st-bad`, `st-warn`, `st-good` (`st-ok` und
   `st-off` neutral) setzen sie um. Nie Farbe allein: immer mit Zahl, Wort oder Pfeil. Keine reinen Ampelfarben.
@@ -78,9 +76,9 @@ nur noch Aliasse. Neue Bausteine nehmen die neuen Namen.
 
 | Baustein | Wo |
 |---|---|
-| Hero: Schlafscore groß im Halbkreis-Gauge | `renderToday`, `Charts.gauge`, `.hero` |
+| Hero: Schlafscore groß, invertiertes Feld | `renderToday`, `Charts.gauge`, `.hero` |
 | Metrik-Karte: Label, Wert, Pill (Veränderung zum Vortag), Sparkline der letzten 7 Tage | `tile()`, `.mcard`, `.pill` |
 | Eingabe-Karte: Icon im Kreis, Label, Wert, Schnellknopf daneben (zwei Knöpfe, nie verschachtelt) | `coffeeCard`, `.cof` |
 | Detailansicht je Kennzahl: Segmented Control für den Zeitraum, Linie mit Verlaufsfläche, Einordnung als Text | `renderTrends`, `Charts.trend`, `.seg` |
-| Untere Leiste mit vier Lucide-Icons, aktiver Tab in Mint | `index.html`, `.tabbar` |
+| Untere Leiste: vier Felder mit Rahmen, aktives Feld invertiert | `index.html`, `.tabbar` |
 | Sheet für jedes Formular und jeden Dialog | `openSheet`, `.sheet` |
